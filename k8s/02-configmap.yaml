@@ -6,4 +6,7 @@ metadata:
 data:
   DB_HOST: postgres
   DB_PORT: "5432"
+  CUSTOMER_SERVICE_URL: "http://customer-service:3002"
   ACCOUNT_SERVICE_URL: "http://account-service:3000"
+  LEDGER_SERVICE_URL: "http://ledger-service:3005"
+  NOTIFICATION_SERVICE_URL: "http://notification-service:3004"

@@ -15,6 +15,45 @@ services:
       timeout: 5s
       retries: 10
 
+  customer-service:
+    build: ./customer-service
+    environment: &database-environment
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: finnova
+      DB_PASSWORD: finnova
+      DB_NAME: finnova
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  identity-service:
+    build: ./identity-service
+    environment:
+      <<: *database-environment
+      CUSTOMER_SERVICE_URL: http://customer-service:3002
+    depends_on:
+      postgres:
+        condition: service_healthy
+      customer-service:
+        condition: service_healthy
+
+  notification-service:
+    build: ./notification-service
+    environment:
+      <<: *database-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ledger-service:
+    build: ./ledger-service
+    environment:
+      <<: *database-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   account-service:
     build: ./account-service
     environment:
@@ -24,8 +63,11 @@ services:
       DB_PASSWORD: finnova
       DB_NAME: finnova
       PORT: 3000
+      CUSTOMER_SERVICE_URL: http://customer-service:3002
     depends_on:
       postgres:
+        condition: service_healthy
+      customer-service:
         condition: service_healthy
     ports:
       - "3000:3000"
@@ -40,11 +82,17 @@ services:
       DB_NAME: finnova
       PORT: 3001
       ACCOUNT_SERVICE_URL: http://account-service:3000
+      LEDGER_SERVICE_URL: http://ledger-service:3005
+      NOTIFICATION_SERVICE_URL: http://notification-service:3004
     depends_on:
       postgres:
         condition: service_healthy
       account-service:
-        condition: service_started
+        condition: service_healthy
+      ledger-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
     ports:
       - "3001:3001"
 
@@ -55,6 +103,8 @@ services:
     depends_on:
       - account-service
       - payment-service
+      - customer-service
+      - identity-service
     ports:
       - "8080:8080"
 
