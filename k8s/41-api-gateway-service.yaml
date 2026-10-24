@@ -1,0 +1,14 @@
+#Kubernetes Service exposing the API Gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: finnova
+spec:
+  type: NodePort
+  selector:
+    app: api-gateway
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30080

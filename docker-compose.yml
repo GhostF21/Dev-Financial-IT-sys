@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: finnova
+      POSTGRES_PASSWORD: finnova
+      POSTGRES_DB: finnova
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finnova"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  account-service:
+    build: ./account-service
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: finnova
+      DB_PASSWORD: finnova
+      DB_NAME: finnova
+      PORT: 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+  payment-service:
+    build: ./payment-service
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: finnova
+      DB_PASSWORD: finnova
+      DB_NAME: finnova
+      PORT: 3001
+      ACCOUNT_SERVICE_URL: http://account-service:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      account-service:
+        condition: service_started
+    ports:
+      - "3001:3001"
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    depends_on:
+      - account-service
+      - payment-service
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:

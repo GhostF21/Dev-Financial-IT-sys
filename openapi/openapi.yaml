@@ -1,0 +1,546 @@
+openapi: 3.0.3
+info:
+  title: FinNova Bank Digital Banking API
+  description: >
+    REST API for FinNova Bank's digital banking application. Supports customer
+    management, account opening, balance inquiries, payments, and transaction
+    history.
+  version: 1.0.0
+  contact:
+    name: FinNova Bank API Team
+    email: api-support@finnovabank.example.com
+servers:
+  - url: /
+    description: Current API Gateway
+  - url: https://api.finnovabank.example.com/v1
+    description: Production
+  - url: https://sandbox-api.finnovabank.example.com/v1
+    description: Sandbox
+
+tags:
+  - name: Customers
+    description: Customer management
+  - name: Accounts
+    description: Account opening and inquiries
+  - name: Payments
+    description: Payment creation
+  - name: Transactions
+    description: Transaction history
+
+security:
+  - bearerAuth: []
+
+paths:
+  /customers:
+    post:
+      tags: [Customers]
+      summary: Create a new customer
+      operationId: createCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerCreateRequest'
+            example:
+              firstName: Jane
+              lastName: Doe
+              email: jane.doe@example.com
+              phone: "+36301234567"
+              dateOfBirth: "1990-05-12"
+              address:
+                street: Andrássy út 1
+                city: Budapest
+                postalCode: "1061"
+                country: HU
+      responses:
+        '201':
+          description: Customer created
+          headers:
+            Location:
+              description: URL of the created customer
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Customer with this email already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /accounts:
+    post:
+      tags: [Accounts]
+      summary: Open a new bank account
+      operationId: openAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountCreateRequest'
+            example:
+              customerId: 8f14e45f-ceea-4e8a-b0f6-4b1a3c2d1e2f
+              accountType: CHECKING
+              currency: EUR
+              initialDeposit: 500.00
+      responses:
+        '201':
+          description: Account opened
+          headers:
+            Location:
+              description: URL of the created account
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Referenced customer not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /accounts/{id}:
+    get:
+      tags: [Accounts]
+      summary: Retrieve account details and balance
+      operationId: getAccount
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Account identifier
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Account details and current balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /payments:
+    post:
+      tags: [Payments]
+      summary: Create a payment
+      operationId: createPayment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentCreateRequest'
+            example:
+              fromAccountId: 8f14e45f-ceea-4e8a-b0f6-4b1a3c2d1e2f
+              toAccountId: 3c2d1e2f-4b1a-4e8a-ceea-8f14e45fb0f6
+              amount: 125.50
+              currency: EUR
+              description: Rent payment October
+              idempotencyKey: 6f9619ff-8b86-d011-b42d-00cf4fc964ff
+      responses:
+        '201':
+          description: Payment accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          description: Insufficient funds
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Source or destination account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Duplicate request (idempotency key already used with different payload)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /transactions:
+    get:
+      tags: [Transactions]
+      summary: Retrieve transaction history
+      operationId: listTransactions
+      parameters:
+        - name: accountId
+          in: query
+          required: true
+          description: Account to fetch transaction history for
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          required: false
+          description: Start of date range (inclusive)
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          description: End of date range (inclusive)
+          schema:
+            type: string
+            format: date
+        - name: type
+          in: query
+          required: false
+          description: Filter by transaction type
+          schema:
+            $ref: '#/components/schemas/TransactionType'
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Paginated list of transactions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    BadRequest:
+      description: Malformed request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Caller not permitted to access this resource
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationError:
+      description: Request failed schema/business validation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorResponse'
+    InternalError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Address:
+      type: object
+      required: [street, city, postalCode, country]
+      properties:
+        street:
+          type: string
+        city:
+          type: string
+        postalCode:
+          type: string
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 country code
+          example: HU
+
+    CustomerCreateRequest:
+      type: object
+      required: [firstName, lastName, email, dateOfBirth]
+      properties:
+        firstName:
+          type: string
+          maxLength: 100
+        lastName:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        dateOfBirth:
+          type: string
+          format: date
+        address:
+          $ref: '#/components/schemas/Address'
+
+    Customer:
+      allOf:
+        - $ref: '#/components/schemas/CustomerCreateRequest'
+        - type: object
+          required: [id, createdAt]
+          properties:
+            id:
+              type: string
+              format: uuid
+            createdAt:
+              type: string
+              format: date-time
+
+    AccountType:
+      type: string
+      enum: [CHECKING, SAVINGS]
+
+    AccountStatus:
+      type: string
+      enum: [ACTIVE, FROZEN, CLOSED]
+
+    AccountCreateRequest:
+      type: object
+      required: [customerId, accountType, currency]
+      properties:
+        customerId:
+          type: string
+          format: uuid
+        accountType:
+          $ref: '#/components/schemas/AccountType'
+        currency:
+          type: string
+          description: ISO 4217 currency code
+          example: EUR
+        initialDeposit:
+          type: number
+          format: double
+          minimum: 0
+          default: 0
+
+    Account:
+      type: object
+      required: [id, customerId, accountType, currency, balance, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        customerId:
+          type: string
+          format: uuid
+        accountType:
+          $ref: '#/components/schemas/AccountType'
+        currency:
+          type: string
+        balance:
+          type: number
+          format: double
+        status:
+          $ref: '#/components/schemas/AccountStatus'
+        createdAt:
+          type: string
+          format: date-time
+
+    PaymentCreateRequest:
+      type: object
+      required: [fromAccountId, toAccountId, amount, currency]
+      properties:
+        fromAccountId:
+          type: string
+          format: uuid
+        toAccountId:
+          type: string
+          format: uuid
+        amount:
+          type: number
+          format: double
+          exclusiveMinimum: true
+          minimum: 0
+        currency:
+          type: string
+        description:
+          type: string
+          maxLength: 255
+        idempotencyKey:
+          type: string
+          format: uuid
+          description: Client-generated key to safely retry the same payment
+
+    PaymentStatus:
+      type: string
+      enum: [PENDING, COMPLETED, FAILED]
+
+    Payment:
+      allOf:
+        - $ref: '#/components/schemas/PaymentCreateRequest'
+        - type: object
+          required: [id, status, createdAt]
+          properties:
+            id:
+              type: string
+              format: uuid
+            status:
+              $ref: '#/components/schemas/PaymentStatus'
+            createdAt:
+              type: string
+              format: date-time
+
+    TransactionType:
+      type: string
+      enum: [DEBIT, CREDIT]
+
+    Transaction:
+      type: object
+      required: [id, accountId, type, amount, currency, balanceAfter, timestamp]
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/TransactionType'
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+        balanceAfter:
+          type: number
+          format: double
+        description:
+          type: string
+        relatedPaymentId:
+          type: string
+          format: uuid
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+
+    PageInfo:
+      type: object
+      required: [page, pageSize, totalItems, totalPages]
+      properties:
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        totalItems:
+          type: integer
+        totalPages:
+          type: integer
+
+    TransactionListResponse:
+      type: object
+      required: [data, pageInfo]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transaction'
+        pageInfo:
+          $ref: '#/components/schemas/PageInfo'
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: RESOURCE_NOT_FOUND
+        message:
+          type: string
+        traceId:
+          type: string
+
+    ValidationErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/Error'
+        - type: object
+          properties:
+            fieldErrors:
+              type: array
+              items:
+                type: object
+                required: [field, issue]
+                properties:
+                  field:
+                    type: string
+                  issue:
+                    type: string
