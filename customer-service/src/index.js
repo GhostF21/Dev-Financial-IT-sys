@@ -12,6 +12,7 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD || 'finnova',
   database: process.env.DB_NAME || 'finnova',
 });
+const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3004';
 
 async function initDb() {
   await pool.query(`
@@ -92,6 +93,7 @@ app.post('/customers/:id/kyc', async (req, res) => {
     if (!updated.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json(error('NOT_FOUND', 'Customer not found')); }
     await client.query('INSERT INTO kyc_verifications (id, customer_id, document_type, result) VALUES ($1,$2,$3,$4)', [randomUUID(), req.params.id, documentType, result]);
     await client.query('COMMIT');
+    await publishNotification(req.params.id, result === 'APPROVED' ? 'KYC_APPROVED' : 'KYC_REJECTED', { documentType, result });
     res.json(toCustomer(updated.rows[0]));
   } catch (err) {
     await client.query('ROLLBACK');
@@ -99,6 +101,17 @@ app.post('/customers/:id/kyc', async (req, res) => {
     res.status(500).json(error('INTERNAL_ERROR', 'Unexpected error'));
   } finally { client.release(); }
 });
+
+async function publishNotification(recipientId, type, payload) {
+  try {
+    const response = await fetch(`${NOTIFICATION_SERVICE_URL}/internal/notifications`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recipientId, type, payload }),
+    });
+    if (!response.ok) console.error(`Notification request failed with ${response.status}`);
+  } catch (err) {
+    console.error('notification-service unavailable', err.message);
+  }
+}
 
 function error(code, message) { return { code, message }; }
 function toCustomer(row) {

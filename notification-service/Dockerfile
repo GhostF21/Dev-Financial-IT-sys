@@ -1,7 +1,8 @@
 FROM node:20-alpine
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --omit=dev
+ARG NPM_CONFIG_STRICT_SSL=true
+RUN npm ci --omit=dev --no-audit --no-fund --strict-ssl=${NPM_CONFIG_STRICT_SSL}
 COPY src ./src
 RUN addgroup -S app && adduser -S app -G app
 USER app

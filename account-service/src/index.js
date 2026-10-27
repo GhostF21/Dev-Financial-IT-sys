@@ -14,6 +14,7 @@ const pool = new Pool({
 });
 
 const CUSTOMER_SERVICE_URL = process.env.CUSTOMER_SERVICE_URL || 'http://localhost:3002';
+const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3004';
 
 async function initDb() {
   await pool.query(`
@@ -88,9 +89,21 @@ app.post('/accounts', async (req, res) => {
      VALUES ($1,$2,$3,$4,$5,'ACTIVE',$6) RETURNING *`,
     [id, customerId, accountType, currency, openingBalance, accountNumber]
   );
+  await publishNotification(customerId, 'ACCOUNT_OPENED', { accountId: id, accountNumber, accountType, currency, initialDeposit: openingBalance });
   res.set('Location', `/accounts/${id}`);
   res.status(201).json(toAccountDto(rows[0]));
 });
+
+async function publishNotification(recipientId, type, payload) {
+  try {
+    const response = await fetch(`${NOTIFICATION_SERVICE_URL}/internal/notifications`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recipientId, type, payload }),
+    });
+    if (!response.ok) console.error(`Notification request failed with ${response.status}`);
+  } catch (err) {
+    console.error('notification-service unavailable', err.message);
+  }
+}
 
 app.get('/accounts/:id', async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM accounts WHERE id=$1', [req.params.id]);

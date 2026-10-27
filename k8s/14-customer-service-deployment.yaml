@@ -30,6 +30,8 @@ spec:
               valueFrom: { secretKeyRef: { name: postgres-secret, key: POSTGRES_PASSWORD } }
             - name: DB_NAME
               valueFrom: { secretKeyRef: { name: postgres-secret, key: POSTGRES_DB } }
+            - name: NOTIFICATION_SERVICE_URL
+              valueFrom: { configMapKeyRef: { name: finnova-config, key: NOTIFICATION_SERVICE_URL } }
           readinessProbe:
             httpGet: { path: /readyz, port: 3002 }
             initialDelaySeconds: 5

@@ -28,6 +28,19 @@ The gateway routes `/customers` to Customer Service, `/auth` to Identity Service
 `/accounts` to Account Service, and `/payments` plus `/transactions` to Payment
 Service. Ledger and notification endpoints are not publicly exposed.
 
+## Domain flow
+
+Customer Service creates a customer and records KYC. Identity Service can then
+register credentials and create an expiring login session for that customer.
+Account Service only opens an account for a customer with approved KYC and owns
+the account balance. Payment Service asks Account Service to perform one atomic
+debit-and-credit transfer, then stores the payment and transaction history.
+It sends ledger entries and customer notifications to their internal services.
+
+The services communicate through internal Docker/Kubernetes service names. The
+gateway is the only intended public entry point; PostgreSQL is persistent local
+in Compose and uses `postgres-pv`/`postgres-pvc` in Kubernetes.
+
 ## Run locally with Docker Compose
 
 Build and start the full stack:
@@ -37,7 +50,7 @@ docker compose up --build -d
 docker compose ps
 ```
 
-All four services should report `healthy`. Stop the stack while keeping its data:
+All application services and PostgreSQL should report `healthy`. Stop the stack while keeping its data:
 
 ```bash
 docker compose down
@@ -48,6 +61,18 @@ Remove the stack and its local PostgreSQL data:
 ```bash
 docker compose down -v --rmi local
 ```
+
+If Docker builds run behind a corporate TLS-inspecting proxy and npm reports a
+certificate validation error, use this temporary PowerShell setting for the
+build only:
+
+```powershell
+$env:NPM_CONFIG_STRICT_SSL = 'false'
+docker compose up --build -d
+Remove-Item Env:NPM_CONFIG_STRICT_SSL
+```
+
+Certificate validation remains enabled by default.
 
 ### Swagger UI
 
@@ -102,6 +127,8 @@ SELECT * FROM customers;
 SELECT * FROM accounts;
 SELECT * FROM payments;
 SELECT * FROM transactions;
+SELECT * FROM ledger_entries;
+SELECT * FROM notifications;
 ```
 
 ## Deploy to Minikube
@@ -133,6 +160,10 @@ minikube image load finnova/ledger-service:1.0
 minikube image load finnova/notification-service:1.0
 minikube image load finnova/api-gateway:1.0
 ```
+
+For the certificate workaround above, add
+`--build-arg NPM_CONFIG_STRICT_SSL=false` to each Node service `docker build`
+command. Do not use it on a normal network.
 
 Apply the manifests:
 

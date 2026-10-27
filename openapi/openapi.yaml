@@ -350,7 +350,8 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: opaque session token
+      description: A session token returned by the Identity Service login endpoint.
 
   responses:
     BadRequest:

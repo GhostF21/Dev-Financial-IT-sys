@@ -16,19 +16,26 @@ services:
       retries: 10
 
   customer-service:
-    build: ./customer-service
+    build:
+      context: ./customer-service
+      args:
+        NPM_CONFIG_STRICT_SSL: ${NPM_CONFIG_STRICT_SSL:-true}
     environment: &database-environment
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USER: finnova
       DB_PASSWORD: finnova
       DB_NAME: finnova
+      NOTIFICATION_SERVICE_URL: http://notification-service:3004
     depends_on:
       postgres:
         condition: service_healthy
 
   identity-service:
-    build: ./identity-service
+    build:
+      context: ./identity-service
+      args:
+        NPM_CONFIG_STRICT_SSL: ${NPM_CONFIG_STRICT_SSL:-true}
     environment:
       <<: *database-environment
       CUSTOMER_SERVICE_URL: http://customer-service:3002
@@ -39,7 +46,10 @@ services:
         condition: service_healthy
 
   notification-service:
-    build: ./notification-service
+    build:
+      context: ./notification-service
+      args:
+        NPM_CONFIG_STRICT_SSL: ${NPM_CONFIG_STRICT_SSL:-true}
     environment:
       <<: *database-environment
     depends_on:
@@ -47,7 +57,10 @@ services:
         condition: service_healthy
 
   ledger-service:
-    build: ./ledger-service
+    build:
+      context: ./ledger-service
+      args:
+        NPM_CONFIG_STRICT_SSL: ${NPM_CONFIG_STRICT_SSL:-true}
     environment:
       <<: *database-environment
     depends_on:
@@ -55,7 +68,10 @@ services:
         condition: service_healthy
 
   account-service:
-    build: ./account-service
+    build:
+      context: ./account-service
+      args:
+        NPM_CONFIG_STRICT_SSL: ${NPM_CONFIG_STRICT_SSL:-true}
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
@@ -64,16 +80,22 @@ services:
       DB_NAME: finnova
       PORT: 3000
       CUSTOMER_SERVICE_URL: http://customer-service:3002
+      NOTIFICATION_SERVICE_URL: http://notification-service:3004
     depends_on:
       postgres:
         condition: service_healthy
       customer-service:
         condition: service_healthy
+      notification-service:
+        condition: service_healthy
     ports:
       - "3000:3000"
 
   payment-service:
-    build: ./payment-service
+    build:
+      context: ./payment-service
+      args:
+        NPM_CONFIG_STRICT_SSL: ${NPM_CONFIG_STRICT_SSL:-true}
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
