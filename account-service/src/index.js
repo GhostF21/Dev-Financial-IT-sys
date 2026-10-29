@@ -13,6 +13,9 @@ const pool = new Pool({
   database: process.env.DB_NAME || 'finnova',
 });
 
+const CUSTOMER_SERVICE_URL = process.env.CUSTOMER_SERVICE_URL || 'http://localhost:3002';
+const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3004';
+
 async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS customers (
@@ -32,8 +35,11 @@ async function initDb() {
       currency TEXT NOT NULL,
       balance NUMERIC(18,2) NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'ACTIVE',
+      account_number TEXT UNIQUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS account_number TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS accounts_account_number_unique ON accounts(account_number);
   `);
 }
 
@@ -57,48 +63,47 @@ app.get('/readyz', async (_req, res) => {
   catch { res.status(503).json({ status: 'not-ready' }); }
 });
 
-app.post('/customers', async (req, res) => {
-  const { firstName, lastName, email, phone, dateOfBirth, address } = req.body || {};
-  if (!firstName || !lastName || !email || !dateOfBirth) {
-    return res.status(422).json({ code: 'VALIDATION_ERROR', message: 'firstName, lastName, email, dateOfBirth are required' });
-  }
-  const id = randomUUID();
-  try {
-    const { rows } = await pool.query(
-      `INSERT INTO customers (id, first_name, last_name, email, phone, date_of_birth, street, city, postal_code, country)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [id, firstName, lastName, email, phone, dateOfBirth,
-       address?.street, address?.city, address?.postalCode, address?.country]
-    );
-    res.set('Location', `/customers/${id}`);
-    res.status(201).json(toCustomerDto(rows[0]));
-  } catch (err) {
-    if (err.code === '23505') {
-      return res.status(409).json({ code: 'CUSTOMER_EXISTS', message: 'Customer with this email already exists' });
-    }
-    console.error(err);
-    res.status(500).json({ code: 'INTERNAL_ERROR', message: 'Unexpected error' });
-  }
-});
-
 app.post('/accounts', async (req, res) => {
   const { customerId, accountType, currency, initialDeposit } = req.body || {};
-  if (!customerId || !accountType || !currency) {
+  const openingBalance = Number(initialDeposit || 0);
+  if (!customerId || !['CHECKING', 'SAVINGS'].includes(accountType) || !/^[A-Z]{3}$/.test(currency || '') || !Number.isFinite(openingBalance) || openingBalance < 0) {
     return res.status(422).json({ code: 'VALIDATION_ERROR', message: 'customerId, accountType, currency are required' });
   }
-  const customer = await pool.query('SELECT id FROM customers WHERE id=$1', [customerId]);
-  if (customer.rowCount === 0) {
-    return res.status(404).json({ code: 'CUSTOMER_NOT_FOUND', message: 'Referenced customer not found' });
+  let customer;
+  try {
+    const response = await fetch(`${CUSTOMER_SERVICE_URL}/customers/${customerId}`);
+    if (response.status === 404) return res.status(404).json({ code: 'CUSTOMER_NOT_FOUND', message: 'Referenced customer not found' });
+    if (!response.ok) throw new Error(`Customer service returned ${response.status}`);
+    customer = await response.json();
+  } catch (err) {
+    console.error('customer-service unavailable', err);
+    return res.status(503).json({ code: 'CUSTOMER_SERVICE_UNAVAILABLE', message: 'Could not validate customer' });
+  }
+  if (customer.kycStatus !== 'APPROVED') {
+    return res.status(422).json({ code: 'KYC_REQUIRED', message: 'Customer KYC must be approved before opening an account' });
   }
   const id = randomUUID();
+  const accountNumber = `FN${Date.now()}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
   const { rows } = await pool.query(
-    `INSERT INTO accounts (id, customer_id, account_type, currency, balance, status)
-     VALUES ($1,$2,$3,$4,$5,'ACTIVE') RETURNING *`,
-    [id, customerId, accountType, currency, initialDeposit || 0]
+    `INSERT INTO accounts (id, customer_id, account_type, currency, balance, status, account_number)
+     VALUES ($1,$2,$3,$4,$5,'ACTIVE',$6) RETURNING *`,
+    [id, customerId, accountType, currency, openingBalance, accountNumber]
   );
+  await publishNotification(customerId, 'ACCOUNT_OPENED', { accountId: id, accountNumber, accountType, currency, initialDeposit: openingBalance });
   res.set('Location', `/accounts/${id}`);
   res.status(201).json(toAccountDto(rows[0]));
 });
+
+async function publishNotification(recipientId, type, payload) {
+  try {
+    const response = await fetch(`${NOTIFICATION_SERVICE_URL}/internal/notifications`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recipientId, type, payload }),
+    });
+    if (!response.ok) console.error(`Notification request failed with ${response.status}`);
+  } catch (err) {
+    console.error('notification-service unavailable', err.message);
+  }
+}
 
 app.get('/accounts/:id', async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM accounts WHERE id=$1', [req.params.id]);
@@ -112,25 +117,50 @@ app.patch('/internal/accounts/:id/balance', async (req, res) => {
   const { delta } = req.body || {};
   if (typeof delta !== 'number') return res.status(422).json({ code: 'VALIDATION_ERROR', message: 'delta must be a number' });
   const { rows } = await pool.query(
-    `UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING *`,
+    `UPDATE accounts SET balance = balance + $1 WHERE id = $2 AND status = 'ACTIVE' AND balance + $1 >= 0 RETURNING *`,
     [delta, req.params.id]
   );
-  if (rows.length === 0) return res.status(404).json({ code: 'NOT_FOUND', message: 'Account not found' });
+  if (rows.length === 0) return res.status(422).json({ code: 'BALANCE_UPDATE_REJECTED', message: 'Account is unavailable or has insufficient funds' });
   res.json(toAccountDto(rows[0]));
 });
 
-function toCustomerDto(r) {
-  return {
-    id: r.id, firstName: r.first_name, lastName: r.last_name, email: r.email, phone: r.phone,
-    dateOfBirth: r.date_of_birth,
-    address: { street: r.street, city: r.city, postalCode: r.postal_code, country: r.country },
-    createdAt: r.created_at,
-  };
-}
+// Account management owns the balance aggregate. A payment requests this operation
+// instead of changing account rows itself, so debit and credit are atomic.
+app.post('/internal/transfers', async (req, res) => {
+  const { fromAccountId, toAccountId, amount, currency } = req.body || {};
+  if (!fromAccountId || !toAccountId || fromAccountId === toAccountId || !Number.isFinite(amount) || amount <= 0 || !currency) {
+    return res.status(422).json({ code: 'VALIDATION_ERROR', message: 'Different account IDs, positive amount, and currency are required' });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT * FROM accounts WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
+      [[fromAccountId, toAccountId]],
+    );
+    if (rows.length !== 2) { await client.query('ROLLBACK'); return res.status(404).json({ code: 'ACCOUNT_NOT_FOUND', message: 'Source or destination account not found' }); }
+    const from = rows.find((row) => row.id === fromAccountId);
+    const to = rows.find((row) => row.id === toAccountId);
+    if (from.status !== 'ACTIVE' || to.status !== 'ACTIVE' || from.currency !== currency || to.currency !== currency) {
+      await client.query('ROLLBACK');
+      return res.status(422).json({ code: 'TRANSFER_REJECTED', message: 'Accounts must be active and use the requested currency' });
+    }
+    if (Number(from.balance) < amount) { await client.query('ROLLBACK'); return res.status(402).json({ code: 'INSUFFICIENT_FUNDS', message: 'Insufficient funds' }); }
+    const debit = await client.query('UPDATE accounts SET balance = balance - $1 WHERE id = $2 RETURNING *', [amount, fromAccountId]);
+    const credit = await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING *', [amount, toAccountId]);
+    await client.query('COMMIT');
+    res.json({ fromAccount: toAccountDto(debit.rows[0]), toAccount: toAccountDto(credit.rows[0]) });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL_ERROR', message: 'Could not complete transfer' });
+  } finally { client.release(); }
+});
+
 function toAccountDto(r) {
   return {
     id: r.id, customerId: r.customer_id, accountType: r.account_type, currency: r.currency,
-    balance: Number(r.balance), status: r.status, createdAt: r.created_at,
+    balance: Number(r.balance), accountNumber: r.account_number, status: r.status, createdAt: r.created_at,
   };
 }
 

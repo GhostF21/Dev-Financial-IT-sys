@@ -14,6 +14,8 @@ const pool = new Pool({
 });
 
 const ACCOUNT_SERVICE_URL = process.env.ACCOUNT_SERVICE_URL || 'http://localhost:3000';
+const LEDGER_SERVICE_URL = process.env.LEDGER_SERVICE_URL || 'http://localhost:3005';
+const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3004';
 
 async function initDb() {
   await pool.query(`
@@ -70,25 +72,30 @@ app.post('/payments', async (req, res) => {
 
   if (idempotencyKey) {
     const existing = await pool.query('SELECT * FROM payments WHERE idempotency_key=$1', [idempotencyKey]);
-    if (existing.rowCount > 0) return res.status(201).json(toPaymentDto(existing.rows[0]));
+    if (existing.rowCount > 0) {
+      const payment = existing.rows[0];
+      if (payment.from_account_id !== fromAccountId || payment.to_account_id !== toAccountId || Number(payment.amount) !== Number(amount) || payment.currency !== currency) {
+        return res.status(409).json({ code: 'IDEMPOTENCY_CONFLICT', message: 'Idempotency key was already used with a different payment' });
+      }
+      return res.status(201).json(toPaymentDto(payment));
+    }
   }
 
-  let fromRes, toRes;
+  let transfer;
   try {
-    [fromRes, toRes] = await Promise.all([
-      fetch(`${ACCOUNT_SERVICE_URL}/accounts/${fromAccountId}`),
-      fetch(`${ACCOUNT_SERVICE_URL}/accounts/${toAccountId}`),
-    ]);
+    const response = await fetch(`${ACCOUNT_SERVICE_URL}/internal/transfers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fromAccountId, toAccountId, amount: Number(amount), currency }),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      return res.status(response.status).json(body);
+    }
+    transfer = await response.json();
   } catch (err) {
     console.error('account-service unreachable', err);
-    return res.status(500).json({ code: 'INTERNAL_ERROR', message: 'Could not reach account service' });
-  }
-  if (fromRes.status === 404 || toRes.status === 404) {
-    return res.status(404).json({ code: 'ACCOUNT_NOT_FOUND', message: 'Source or destination account not found' });
-  }
-  const fromAccount = await fromRes.json();
-  if (Number(fromAccount.balance) < Number(amount)) {
-    return res.status(402).json({ code: 'INSUFFICIENT_FUNDS', message: 'Insufficient funds' });
+    return res.status(503).json({ code: 'ACCOUNT_SERVICE_UNAVAILABLE', message: 'Could not reach account service' });
   }
 
   const id = randomUUID();
@@ -98,26 +105,37 @@ app.post('/payments', async (req, res) => {
     [id, fromAccountId, toAccountId, amount, currency, description, idempotencyKey || null]
   );
 
-  const debitRes = await fetch(`${ACCOUNT_SERVICE_URL}/internal/accounts/${fromAccountId}/balance`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ delta: -amount }),
-  }).then(r => r.json());
-  const creditRes = await fetch(`${ACCOUNT_SERVICE_URL}/internal/accounts/${toAccountId}/balance`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ delta: amount }),
-  }).then(r => r.json());
-
   await pool.query(
     `INSERT INTO transactions (id, account_id, type, amount, currency, balance_after, description, related_payment_id)
      VALUES ($1,$2,'DEBIT',$3,$4,$5,$6,$7)`,
-    [randomUUID(), fromAccountId, amount, currency, debitRes.balance, description, id]
+    [randomUUID(), fromAccountId, amount, currency, transfer.fromAccount.balance, description, id]
   );
   await pool.query(
     `INSERT INTO transactions (id, account_id, type, amount, currency, balance_after, description, related_payment_id)
      VALUES ($1,$2,'CREDIT',$3,$4,$5,$6,$7)`,
-    [randomUUID(), toAccountId, amount, currency, creditRes.balance, description, id]
+    [randomUUID(), toAccountId, amount, currency, transfer.toAccount.balance, description, id]
   );
+
+  // These calls cross bounded contexts. They do not roll back the completed account transfer
+  // if the external adapter is temporarily unavailable; the payment remains the source of truth.
+  await Promise.all([
+    postInternal(LEDGER_SERVICE_URL, '/internal/ledger-entries', { transactionId: id, accountId: fromAccountId, entryType: 'DEBIT', amount: Number(amount), currency }),
+    postInternal(LEDGER_SERVICE_URL, '/internal/ledger-entries', { transactionId: id, accountId: toAccountId, entryType: 'CREDIT', amount: Number(amount), currency }),
+    postInternal(NOTIFICATION_SERVICE_URL, '/internal/notifications', { recipientId: transfer.fromAccount.customerId, type: 'PAYMENT_SENT', payload: { paymentId: id, amount: Number(amount), currency } }),
+    postInternal(NOTIFICATION_SERVICE_URL, '/internal/notifications', { recipientId: transfer.toAccount.customerId, type: 'PAYMENT_RECEIVED', payload: { paymentId: id, amount: Number(amount), currency } }),
+  ]);
 
   res.status(201).json(toPaymentDto(rows[0]));
 });
+
+async function postInternal(baseUrl, path, body) {
+  try {
+    const response = await fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!response.ok) console.error(`Internal request to ${path} failed with ${response.status}`);
+  } catch (err) {
+    console.error(`Internal request to ${path} failed`, err.message);
+  }
+}
 
 app.get('/transactions', async (req, res) => {
   const { accountId, from, to, type, page = 1, pageSize = 20 } = req.query;

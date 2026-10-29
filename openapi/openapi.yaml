@@ -19,16 +19,15 @@ servers:
 
 tags:
   - name: Customers
-    description: Customer management
+    description: Customer onboarding and KYC
+  - name: Identity
+    description: Credentials and login sessions
   - name: Accounts
     description: Account opening and inquiries
   - name: Payments
     description: Payment creation
   - name: Transactions
     description: Transaction history
-
-security:
-  - bearerAuth: []
 
 paths:
   /customers:
@@ -79,6 +78,82 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '500':
           $ref: '#/components/responses/InternalError'
+
+  /customers/{id}/kyc:
+    post:
+      tags: [Customers]
+      summary: Record a KYC verification result
+      operationId: verifyCustomerKyc
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [documentType, result]
+              properties:
+                documentType:
+                  type: string
+                  example: PASSPORT
+                result:
+                  type: string
+                  enum: [APPROVED, REJECTED]
+      responses:
+        '200':
+          description: KYC result recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /auth/register:
+    post:
+      tags: [Identity]
+      summary: Register credentials for a customer
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegistrationRequest'
+      responses:
+        '201':
+          description: User account created
+        '409':
+          description: Username already exists
+
+  /auth/login:
+    post:
+      tags: [Identity]
+      summary: Create a login session
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
   /accounts:
     post:
@@ -275,7 +350,8 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: opaque session token
+      description: A session token returned by the Identity Service login endpoint.
 
   responses:
     BadRequest:
@@ -356,11 +432,14 @@ components:
       allOf:
         - $ref: '#/components/schemas/CustomerCreateRequest'
         - type: object
-          required: [id, createdAt]
+          required: [id, kycStatus, createdAt]
           properties:
             id:
               type: string
               format: uuid
+            kycStatus:
+              type: string
+              enum: [PENDING, APPROVED, REJECTED]
             createdAt:
               type: string
               format: date-time
@@ -399,6 +478,9 @@ components:
         id:
           type: string
           format: uuid
+        accountNumber:
+          type: string
+          description: FinNova account number
         customerId:
           type: string
           format: uuid
@@ -412,6 +494,43 @@ components:
         status:
           $ref: '#/components/schemas/AccountStatus'
         createdAt:
+          type: string
+          format: date-time
+
+    UserRegistrationRequest:
+      type: object
+      required: [customerId, username, password]
+      properties:
+        customerId:
+          type: string
+          format: uuid
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+          minLength: 8
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+
+    LoginResponse:
+      type: object
+      required: [accessToken, tokenType, expiresAt]
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+          example: Bearer
+        expiresAt:
           type: string
           format: date-time
 
