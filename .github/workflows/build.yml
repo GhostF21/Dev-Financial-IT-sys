@@ -42,7 +42,7 @@ jobs:
       run:
         working-directory: ${{ matrix.service }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -66,7 +66,7 @@ jobs:
     name: Validate Kubernetes manifests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Render kustomize
         run: kubectl kustomize infra/k8s > /dev/null
 
@@ -92,7 +92,7 @@ jobs:
     env:
       PUSH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v3
 

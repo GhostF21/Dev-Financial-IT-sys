@@ -47,7 +47,7 @@ jobs:
         ledger-service notification-service wallet-service api-gateway
     steps:
       - name: Checkout the commit being released
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.IMAGE_TAG }}
 
