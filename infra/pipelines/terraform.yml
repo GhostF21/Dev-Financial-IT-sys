@@ -1,0 +1,125 @@
+# Infrastructure pipeline: provisions / updates the PROD Azure environment with Terraform.
+#   Pull request -> fmt + validate + plan (shown in the run summary)
+#   Push to main -> plan, then apply after the "production" environment approval
+name: Infrastructure (Terraform)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC login to Azure, no client secret stored in GitHub
+
+concurrency:
+  group: terraform-prod
+  cancel-in-progress: false # never interrupt a running apply
+
+env:
+  TF_VERSION: "1.9.8"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  ARM_USE_OIDC: "true"
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  BACKEND_CONFIG: >-
+    -backend-config=resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}
+    -backend-config=storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+    -backend-config=container_name=tfstate
+    -backend-config=key=finnova-prod.tfstate
+    -backend-config=use_azuread_auth=true
+
+defaults:
+  run:
+    working-directory: infra/terraform
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      exitcode: ${{ steps.plan.outputs.exitcode }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Format check
+        run: terraform fmt -check -recursive
+
+      - name: Init
+        run: terraform init $BACKEND_CONFIG
+
+      - name: Validate
+        run: terraform validate
+
+      - name: Plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -var-file=prod.tfvars -out=tfplan -detailed-exitcode -no-color
+          ec=$?
+          set -e
+          echo "exitcode=$ec" >> "$GITHUB_OUTPUT"
+          # 0 = no changes, 2 = changes present, 1 = error
+          if [ "$ec" -eq 1 ]; then exit 1; fi
+
+      - name: Publish plan to run summary
+        if: steps.plan.outputs.exitcode == '2'
+        run: |
+          {
+            echo "## Terraform plan (prod)"
+            echo '```'
+            terraform show -no-color tfplan | tail -c 60000
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: Apply (production)
+    needs: plan
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request' &&
+      needs.plan.outputs.exitcode == '2'
+    runs-on: ubuntu-latest
+    environment: production # approval gate configured in GitHub -> Settings -> Environments
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Init
+        run: terraform init $BACKEND_CONFIG
+
+      # The plan file is not passed between jobs as an artifact because it would contain
+      # secrets (e.g. the generated DB password). Re-plan and apply in the same job.
+      - name: Plan
+        run: terraform plan -var-file=prod.tfvars -out=tfplan -no-color
+
+      - name: Apply
+        run: terraform apply -no-color tfplan
+
+      - name: Show values for GitHub repository variables
+        run: |
+          {
+            echo "## Repository variables used by Build / Release"
+            echo '```'
+            terraform output -json github_variables
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

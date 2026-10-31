@@ -1,0 +1,71 @@
+# notification-service - production (AKS)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  labels: { app: notification-service }
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: { app: notification-service }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: notification-service, tier: backend }
+    spec:
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: notification-service }
+      containers:
+        - name: notification-service
+          image: finnova/notification-service   # tag/registry set by the release pipeline (kustomize edit set image)
+          ports:
+            - containerPort: 3004
+          env:
+            - name: PORT
+              value: "3004"
+          envFrom:
+            - configMapRef: { name: finnova-config }
+            - secretRef: { name: finnova-db }   # created by the release pipeline from Key Vault
+          readinessProbe:
+            httpGet: { path: /readyz, port: 3004 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 3004 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  labels: { app: notification-service }
+spec:
+  type: ClusterIP
+  selector: { app: notification-service }
+  ports:
+    - port: 3004
+      targetPort: 3004
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: notification-service
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: notification-service }
