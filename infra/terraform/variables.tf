@@ -62,24 +62,38 @@ variable "aks_sku_tier" {
 }
 
 variable "aks_node_vm_size" {
-  type    = string
-  default = "Standard_D2s_v5"
+  description = "Node VM size. Standard_B2als_v2 (2 vCPU / 4 GiB) is cheap and usually allowed on Azure for Students."
+  type        = string
+  default     = "Standard_B2als_v2"
 }
 
 variable "aks_node_min_count" {
   type    = number
-  default = 2
+  default = 1
 }
 
 variable "aks_node_max_count" {
   type    = number
-  default = 4
+  default = 2
+}
+
+variable "aks_os_disk_size_gb" {
+  description = "Node OS disk size. The AKS default (128 GB) costs noticeably more than a small disk."
+  type        = number
+  default     = 30
+}
+
+variable "enable_monitoring" {
+  description = "Container Insights + Log Analytics. Billed per GB of logs ingested - off by default to save money."
+  type        = bool
+  default     = false
 }
 
 # ---------- Container registry ----------
 variable "acr_sku" {
-  type    = string
-  default = "Standard"
+  description = "Basic is enough for a handful of images."
+  type        = string
+  default     = "Basic"
 }
 
 # ---------- PostgreSQL ----------

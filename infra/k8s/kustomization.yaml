@@ -20,6 +20,7 @@ resources:
   - payment-service.yaml
   - ledger-service.yaml
   - notification-service.yaml
+  - wallet-service.yaml
   - api-gateway.yaml
 
 # The release pipeline rewrites these to <acr>.azurecr.io/finnova/<svc>:<git-sha>
@@ -30,4 +31,5 @@ images:
   - name: finnova/payment-service
   - name: finnova/ledger-service
   - name: finnova/notification-service
+  - name: finnova/wallet-service
   - name: finnova/api-gateway

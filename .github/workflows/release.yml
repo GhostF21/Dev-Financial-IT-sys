@@ -44,7 +44,7 @@ jobs:
       NAMESPACE: finnova
       SERVICES: >-
         customer-service identity-service account-service payment-service
-        ledger-service notification-service api-gateway
+        ledger-service notification-service wallet-service api-gateway
     steps:
       - name: Checkout the commit being released
         uses: actions/checkout@v4
@@ -149,6 +149,7 @@ jobs:
           done
           curl -fsS "$base/healthz"
           curl -fsS -o /dev/null "$base/docs/"
+          curl -fsS -o /dev/null "$base/wallet/"
           echo "### Released \`$IMAGE_TAG\` to ${{ steps.endpoint.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Diagnostics and rollback on failure

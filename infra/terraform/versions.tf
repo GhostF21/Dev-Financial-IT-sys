@@ -26,7 +26,8 @@ provider "azurerm" {
   # subscription_id / tenant_id / client_id are read from ARM_* environment variables.
   features {
     key_vault {
-      purge_soft_delete_on_destroy = false
+      # With purge protection off (prod.tfvars) a destroyed vault is purged, so its name can be reused.
+      purge_soft_delete_on_destroy = true
     }
     resource_group {
       prevent_deletion_if_contains_resources = true

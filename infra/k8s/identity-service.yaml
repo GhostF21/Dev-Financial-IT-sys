@@ -5,7 +5,7 @@ metadata:
   name: identity-service
   labels: { app: identity-service }
 spec:
-  replicas: 2
+  replicas: 1   # cost-saving default; raise to 2+ for high availability
   revisionHistoryLimit: 5
   selector:
     matchLabels: { app: identity-service }
@@ -43,7 +43,7 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 15
           resources:
-            requests: { cpu: "100m", memory: "128Mi" }
+            requests: { cpu: "50m", memory: "96Mi" }
             limits: { cpu: "500m", memory: "256Mi" }
           securityContext:
             allowPrivilegeEscalation: false
@@ -66,6 +66,6 @@ kind: PodDisruptionBudget
 metadata:
   name: identity-service
 spec:
-  minAvailable: 1
+  maxUnavailable: 1   # never blocks node drains/upgrades, also with 1 replica
   selector:
     matchLabels: { app: identity-service }

@@ -1,0 +1,14 @@
+# dependencies
+node_modules/
+
+# local secrets - never commit
+.env
+.env.*
+*.pem
+*.pfx
+
+# terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+backend.hcl

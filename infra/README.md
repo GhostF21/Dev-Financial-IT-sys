@@ -1,12 +1,12 @@
-# FinNova – Azure production deployment
+# FinNova – Azure deployment (prod, student-budget edition)
 
-Everything needed to run FinNova in Azure (PROD only). The local Docker Compose /
-Minikube setup in the repo root is unchanged.
+Everything needed to run FinNova in Azure. The local Docker Compose / Minikube setup in
+the repo root is unchanged.
 
 ```
 infra/
-  bootstrap/bootstrap.sh   one-time: Terraform state storage + GitHub OIDC identity
-  terraform/               Azure infrastructure (prod)
+  bootstrap/bootstrap.sh   one-time: Terraform state storage + GitHub's Azure identity
+  terraform/               Azure infrastructure (prod.tfvars = cheap settings)
   k8s/                     Kubernetes manifests for AKS (kustomize)
 .github/workflows/
   terraform.yml            Infrastructure pipeline
@@ -14,109 +14,202 @@ infra/
   release.yml              Release pipeline (CD)
 ```
 
-## Architecture
+## What gets created
 
 ```
-Internet ──► Azure Load Balancer (public IP / <label>.<region>.cloudapp.azure.com)
-               │
-          ┌────▼──────────────── AKS (vnet-finnova-prod / snet-aks) ───────────────┐
-          │ api-gateway (nginx) ──► customer / identity / account / payment        │
-          │                         ledger / notification services (ClusterIP)     │
-          │ NetworkPolicies: only the gateway accepts traffic from outside         │
-          └────────────────────────────────┬───────────────────────────────────────┘
-                                           │ TLS (PGSSLMODE=require), private IP only
-                          Azure Database for PostgreSQL Flexible Server (snet-postgres)
-
-ACR (images, pulled by AKS managed identity) · Key Vault (DB credentials)
-Log Analytics (Container Insights) · Terraform state in Azure Storage
+Internet ─► Azure Load Balancer ─► AKS (1× Standard_B2als_v2 node, autoscales to 2)
+                                    api-gateway (nginx, /docs, /wallet UI)
+                                    customer · identity · account · payment
+                                    ledger · notification · wallet services
+                                         │ TLS, private network only
+                                         ▼
+                          PostgreSQL Flexible Server (B1ms)
+ACR Basic (images) · Key Vault (DB credentials) · Storage account (Terraform state)
 ```
 
-| Resource | Name |
+### Approximate monthly cost if it runs 24/7
+
+| Item | ≈ USD / month |
 | --- | --- |
-| Resource group | `rg-finnova-prod` |
-| AKS | `aks-finnova-prod` (Entra ID auth, Azure RBAC, no local accounts, autoscaling 2–4 nodes) |
-| Container registry | `acrfinnovaprod<suffix>` (admin user disabled) |
-| PostgreSQL 16 | `psql-finnova-prod-<suffix>` (private VNet access, TLS required, 14-day backups) |
-| Key Vault | `kv-finnova-prod-<suffix>` (RBAC, purge protection) |
-| Log Analytics | `log-finnova-prod` |
+| AKS node Standard_B2als_v2 + 30 GB OS disk | 30–35 |
+| Standard Load Balancer + 2 public IPs (AKS requirement) | 20–25 |
+| PostgreSQL B1ms + 32 GB storage | 17–20 |
+| Container Registry Basic | 5 |
+| Key Vault, state storage, AKS control plane (Free tier) | < 1 |
+| **Total** | **≈ 75–85** |
 
-## How the pipelines work on GitHub
+With $100 credit that is ~5 weeks non-stop. **Stop it when you are not using it**
+(see "Saving money") and it lasts the whole semester. Prices vary by region; check the
+[Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/).
 
-GitHub Actions has no separate "release pipeline" object like Azure DevOps Classic
-Releases. Every pipeline is a **workflow** (YAML in `.github/workflows`). Release
-behaviour is built from three features:
+---
 
-1. **Workflow chaining** – `release.yml` uses `on: workflow_run` so it starts
-   automatically when the `Build` workflow finishes successfully on `main`.
-2. **Environments** – the deploy jobs use `environment: production`. In
-   *Settings → Environments → production* you can add **required reviewers**
-   (manual approval before going live), a wait timer, and restrict it to the `main`
-   branch. The run then pauses with a "Review deployments" button.
-3. **Immutable artifacts** – Build pushes images tagged with the commit SHA; Release
-   deploys exactly that SHA. Rolling back = run *Release* manually with an older SHA.
+## Step-by-step: first deployment
 
-```
-push to main
- ├─ infra/terraform/** changed ─► Infrastructure: fmt/validate/plan ─► [approval] ─► apply
- └─ app / k8s changed ─────────► Build: npm ci + checks ─► docker build ─► push to ACR (:sha)
-                                        │ success
-                                        ▼
-                                 Release: [approval] ─► Key Vault → k8s secret ─► kubectl apply -k
-                                          ─► rollout status ─► smoke test (auto-rollback on failure)
-pull request to main ─► Build (no push) + Terraform plan only
-```
+You need: the Azure student subscription, a GitHub account with admin rights on the repo,
+and a browser. Everything below runs in **Azure Cloud Shell** (no local installs needed).
 
-Authentication to Azure uses **OIDC federated credentials** – GitHub gets a
-short-lived token; no Azure password/secret is stored in GitHub.
-
-## First-time setup
-
-1. **Pick a suffix** – edit `infra/terraform/prod.tfvars`: `unique_suffix` (3–6
-   lowercase chars) and add your user object id to `admin_object_ids`.
-2. **Bootstrap** (Azure Cloud Shell → Bash, or Git Bash with `az login`):
+### 1. Open Azure Cloud Shell
+1. Sign in at <https://portal.azure.com> with your student account.
+2. Click the **`>_`** icon in the top bar → choose **Bash**. If asked, let it create
+   storage (pennies per month) or pick "No storage account required".
+3. Check you are on the student subscription:
    ```bash
-   GITHUB_REPO=GhostF21/Dev-Financial-IT-sys LOCATION=westeurope bash infra/bootstrap/bootstrap.sh
+   az account show --query "{name:name, id:id}" -o table
    ```
-   It sets the GitHub secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
-   `AZURE_SUBSCRIPTION_ID` and variables `TF_STATE_RESOURCE_GROUP`,
-   `TF_STATE_STORAGE_ACCOUNT` (or prints them if `gh` is not installed).
-3. **Create the environment** – GitHub → *Settings → Environments → New environment*
-   `production`; add yourself as required reviewer, deployment branches: `main`.
-4. **Provision infrastructure** – merge to `main` (or run *Infrastructure (Terraform)*
-   manually). Takes ~15 minutes the first time.
-5. **Set the remaining repository variables** from the apply run summary
-   (`github_variables` output): `AZURE_RESOURCE_GROUP`, `AKS_CLUSTER_NAME`,
-   `ACR_NAME`, `KEY_VAULT_NAME`. Optional: `DNS_LABEL` (e.g. `finnova-<suffix>`) for
-   a stable hostname `finnova-<suffix>.westeurope.cloudapp.azure.com`.
-6. **Deploy the app** – run *Build* manually once (or push any app change). Release
-   follows automatically. The API is then at `http://<ip-or-host>/` and Swagger at
-   `/docs/`.
 
-> Order matters only the first time: Build needs ACR, so infrastructure must exist first.
+### 2. Find a region you are allowed to use
+Student subscriptions only allow a few regions. List them:
+```bash
+az policy assignment list --query "[].parameters.listOfAllowedLocations.value" -o tsv
+```
+Pick one from the list – prefer **swedencentral**, **northeurope**, **polandcentral** or
+**germanywestcentral** (cheap and close to Hungary). Then check the node size is offered
+there and you have vCPU quota (needs at least 4 free "Total Regional vCPUs"):
+```bash
+REGION=swedencentral   # <- your choice
+az vm list-skus -l $REGION --size Standard_B2als_v2 --query "[].{size:name, restrictions:restrictions[0].reasonCode}" -o table
+az vm list-usage -l $REGION --query "[?localName=='Total Regional vCPUs']" -o table
+```
+If `Standard_B2als_v2` shows a restriction, try `Standard_B2s` or `Standard_B2as_v2`.
 
-## Day-2 operations
+### 3. Edit `infra/terraform/prod.tfvars` (in your repo, then commit)
+```hcl
+location      = "swedencentral"   # region from step 2
+unique_suffix = "mm7x"            # 3-6 random lowercase letters/digits - makes names unique
+admin_object_ids = ["<your object id>"]   # az ad signed-in-user show --query id -o tsv
+aks_node_vm_size = "Standard_B2als_v2"    # or the size that worked in step 2
+```
+
+### 4. Run the bootstrap script (once)
+In Cloud Shell:
+```bash
+git clone https://github.com/GhostF21/Dev-Financial-IT-sys.git
+cd Dev-Financial-IT-sys
+git checkout development        # or the branch that contains infra/
+GITHUB_REPO=GhostF21/Dev-Financial-IT-sys LOCATION=$REGION bash infra/bootstrap/bootstrap.sh
+```
+It creates `rg-finnova-tfstate` with:
+* a storage account for the Terraform state,
+* a **managed identity** that GitHub Actions logs in as, trusted only for your repo's
+  `main` branch, `production` environment and pull requests,
+* the role assignments that identity needs.
+
+At the end it prints 3 secrets and 2 variables. Keep that output open.
+
+### 5. Configure GitHub
+In the repo: **Settings → Secrets and variables → Actions**.
+
+* **Secrets** tab → *New repository secret*:
+  `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
+* **Variables** tab → *New repository variable*:
+  `TF_STATE_RESOURCE_GROUP`, `TF_STATE_STORAGE_ACCOUNT`
+
+Then **Settings → Environments → New environment** → name it **`production`**:
+* tick **Required reviewers** and add yourself (every deploy waits for your click),
+* **Deployment branches** → *Selected branches* → `main`.
+
+(Optional) **Settings → Actions → General** → make sure Actions are allowed.
+
+### 6. Create the infrastructure
+Merge your branch into `main` (or open *Actions → Infrastructure (Terraform) → Run
+workflow*). The **Plan** job shows what will be created; then the **Apply (production)**
+job waits → click **Review deployments → Approve**. First run takes ~10–15 minutes.
+
+### 7. Set the remaining repository variables
+Open the finished Apply run → *Summary* shows `github_variables`. Add them as repository
+**variables**: `AZURE_RESOURCE_GROUP`, `AKS_CLUSTER_NAME`, `ACR_NAME`, `KEY_VAULT_NAME`.
+Optional: `DNS_LABEL` = e.g. `finnova-mm7x` → stable URL
+`http://finnova-mm7x.<region>.cloudapp.azure.com`.
+
+### 8. Build and release the app
+*Actions → Build → Run workflow* (branch `main`). When it succeeds, **Release** starts
+automatically and waits for your approval. After approval it deploys, waits for every
+service and smoke-tests the gateway. The run's environment link shows the URL:
+
+* API: `http://<ip-or-dns>/customers`, `/accounts`, `/payments`, `/wallets` …
+* Swagger: `http://<ip-or-dns>/docs/`
+* Wallet web app: `http://<ip-or-dns>/wallet/`
+
+From now on every push to `main` builds and (after your approval) releases automatically.
+
+---
+
+## Credentials – where does what live?
+
+**Rule: no passwords, keys or `.env` files in the repository.** This setup needs almost
+no secrets at all:
+
+| What | Where it lives | Notes |
+| --- | --- | --- |
+| Azure login for pipelines | **Nothing stored.** GitHub gets a short-lived OIDC token, Azure trusts it via the federated credentials on the managed identity | No client secret that can leak or expire |
+| `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | GitHub **Secrets** | Identifiers, not passwords – kept as secrets so they are not printed in logs |
+| Resource names, state account (`ACR_NAME`, …) | GitHub **Variables** | Not sensitive |
+| PostgreSQL admin password | Generated by Terraform → **Azure Key Vault** (`db-password`) → copied by the release into a Kubernetes **Secret** `finnova-db` | You never see or type it |
+| DB host / user / name | Key Vault (`db-host`, `db-user`, `db-name`) | |
+| Terraform state (contains the DB password) | Private Azure Storage account, Entra-ID access only, versioned | Never commit `*.tfstate` (already in `.gitignore`) |
+| Local development (`docker-compose.yml`, `k8s/01-secret.yaml`) | In the repo, value `finnova` | Fine: local throw-away database only. Never reuse these values in Azure |
+| Container registry login | None – AKS pulls with its managed identity; Build logs in via OIDC | ACR admin user is disabled |
+
+If you ever need a real secret for the app (e.g. an API key for a card processor): put it
+in Key Vault, then add it to the "Sync database secret from Key Vault" step in
+`release.yml` (or a similar step) so it ends up in a Kubernetes Secret. For something only
+the pipeline uses, a GitHub **environment secret** on `production` is fine.
+
+Read a secret yourself (needs your object id in `admin_object_ids`):
+```bash
+az keyvault secret show --vault-name kv-finnova-prod-<suffix> -n db-password --query value -o tsv
+```
+
+---
+
+## Saving money
+
+```bash
+# Pause (nodes + DB compute stop billing; LB/IP/disks/ACR still cost ~1 USD/day)
+az aks stop -g rg-finnova-prod -n aks-finnova-prod
+az postgres flexible-server stop -g rg-finnova-prod -n psql-finnova-prod-<suffix>
+
+# Resume
+az postgres flexible-server start -g rg-finnova-prod -n psql-finnova-prod-<suffix>
+az aks start -g rg-finnova-prod -n aks-finnova-prod
+```
+* A stopped PostgreSQL server restarts by itself after 7 days – stop it again.
+* Set a **budget alert**: Portal → *Cost Management → Budgets → Add* → e.g. 20 USD/month
+  with email alerts at 50 % / 90 %.
+* Check spending: *Subscriptions → your subscription → Cost analysis*, or
+  <https://www.microsoftazuresponsorships.com/Balance> for remaining student credit.
+* Done for good? Delete everything:
+  ```bash
+  az group delete -n rg-finnova-prod --yes        # app infrastructure
+  az group delete -n rg-finnova-tfstate --yes     # state + GitHub identity
+  ```
+  (or run `terraform destroy` locally first, then delete the state group).
+* Want logs? set `enable_monitoring = true` in `prod.tfvars` – Log Analytics is billed
+  per GB ingested, so switch it off again afterwards.
+
+## Troubleshooting
+
+| Error | Fix |
+| --- | --- |
+| `RequestDisallowedByAzure` / `RequestDisallowedByPolicy` | Region not allowed → step 2, change `location` |
+| `QuotaExceeded` / `Total Regional Cores` | Use a 2-vCPU size, keep `aks_node_max_count = 2`, or request quota |
+| `SkuNotAvailable` | Try another node size from step 2 |
+| `AADSTS700213` / `No matching federated identity record` | Repo name or branch differs from the bootstrap `GITHUB_REPO`, or the job is not on `main` / `production` |
+| Key Vault `name already in use` after a destroy | Change `unique_suffix`, or `az keyvault purge -n <name>` |
+| Pods `Pending` | Node full → autoscaler adds a 2nd node (needs quota); `kubectl -n finnova describe pod <pod>` |
+
+## Day-2
 
 ```bash
 az aks get-credentials -g rg-finnova-prod -n aks-finnova-prod
 kubelogin convert-kubeconfig -l azurecli
 kubectl -n finnova get pods
 ```
+Run Terraform locally only for `plan` (copy `terraform/backend.hcl.example` to
+`backend.hcl`); a local `apply` would move the pipeline's roles to your user.
 
-Run Terraform locally: copy `terraform/backend.hcl.example` to `backend.hcl`, then
-`terraform init -backend-config=backend.hcl && terraform plan -var-file=prod.tfvars`.
-Use local runs for `plan` only: Terraform grants roles to "whoever runs it", so a local
-`apply` would move the pipeline's ACR/AKS/Key Vault roles to your user.
+## Before real customers
 
-## Before real customer traffic (not included yet)
-
-- **HTTPS** – the gateway is plain HTTP on port 80. Add an ingress controller
-  (App Routing add-on or Application Gateway for Containers) with a TLS certificate,
-  or put Azure Front Door/WAF in front.
-- **Least-privilege DB users** – services currently use the server admin login; create
-  per-service roles, or move to Entra ID workload identity auth.
-- **Schema migrations** – tables are created at service start-up; a migration tool
-  (e.g. node-pg-migrate) run as a pre-deploy job is safer.
-- **Sizing / SLA** – `aks_sku_tier = "Standard"`, a General Purpose PostgreSQL SKU with
-  `postgres_high_availability = true`, and geo-redundant backups.
-- **Separate read-only identity for PR plans** – currently PR plans use the same
-  service principal as deployments.
+HTTPS (ingress + certificate), per-service DB users, real authentication on the API,
+2+ replicas per service, `aks_sku_tier = "Standard"`, General Purpose PostgreSQL with HA.

@@ -29,6 +29,7 @@ resource "azurerm_kubernetes_cluster" "main" {
     min_count                   = var.aks_node_min_count
     max_count                   = var.aks_node_max_count
     max_pods                    = 110
+    os_disk_size_gb             = var.aks_os_disk_size_gb
     temporary_name_for_rotation = "systemtmp"
 
     upgrade_settings {
@@ -51,9 +52,12 @@ resource "azurerm_kubernetes_cluster" "main" {
     outbound_type       = "loadBalancer"
   }
 
-  oms_agent {
-    log_analytics_workspace_id      = azurerm_log_analytics_workspace.main.id
-    msi_auth_for_monitoring_enabled = true
+  dynamic "oms_agent" {
+    for_each = var.enable_monitoring ? [1] : []
+    content {
+      log_analytics_workspace_id      = azurerm_log_analytics_workspace.main[0].id
+      msi_auth_for_monitoring_enabled = true
+    }
   }
 
   tags = local.tags

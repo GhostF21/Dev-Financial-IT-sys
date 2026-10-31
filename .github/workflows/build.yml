@@ -11,6 +11,7 @@ on:
       - "infra/terraform/**"
       - ".github/workflows/terraform.yml"
       - "**/*.md"
+      - "docs/**"
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -36,6 +37,7 @@ jobs:
           - payment-service
           - ledger-service
           - notification-service
+          - wallet-service
     defaults:
       run:
         working-directory: ${{ matrix.service }}
@@ -85,6 +87,7 @@ jobs:
           - { service: payment-service, context: payment-service, dockerfile: payment-service/Dockerfile }
           - { service: ledger-service, context: ledger-service, dockerfile: ledger-service/Dockerfile }
           - { service: notification-service, context: notification-service, dockerfile: notification-service/Dockerfile }
+          - { service: wallet-service, context: wallet-service, dockerfile: wallet-service/Dockerfile }
           - { service: api-gateway, context: ., dockerfile: api-gateway/Dockerfile }
     env:
       PUSH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}

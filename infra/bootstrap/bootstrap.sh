@@ -4,19 +4,19 @@
 #
 # Creates:
 #   1. Storage account for Terraform remote state
-#   2. Entra ID app registration + service principal used by GitHub Actions
+#   2. User-assigned managed identity used by GitHub Actions
 #   3. Federated credentials (OIDC) so GitHub can log in WITHOUT a stored password
-#   4. Role assignments for that service principal
+#   4. Role assignments for that identity
 #   5. GitHub secrets / variables (automatically if the GitHub CLI "gh" is installed)
 #
-# Usage:  GITHUB_REPO=owner/repo LOCATION=westeurope ./bootstrap.sh
+# Usage:  GITHUB_REPO=owner/repo LOCATION=swedencentral bash bootstrap.sh
 set -euo pipefail
 
 GITHUB_REPO="${GITHUB_REPO:-GhostF21/Dev-Financial-IT-sys}"
-LOCATION="${LOCATION:-westeurope}"
+LOCATION="${LOCATION:-swedencentral}"
 STATE_RG="${STATE_RG:-rg-finnova-tfstate}"
-STATE_SA="${STATE_SA:-stfinnovatf$(openssl rand -hex 3)}" # must be globally unique, <= 24 chars
-APP_NAME="${APP_NAME:-gh-finnova-prod-deployer}"
+STATE_SA="${STATE_SA:-}" # globally unique, <= 24 chars; generated (and reused on re-runs) if empty
+IDENTITY_NAME="${IDENTITY_NAME:-id-finnova-github-deployer}"
 
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 TENANT_ID=$(az account show --query tenantId -o tsv)
@@ -25,12 +25,17 @@ echo "Subscription: $SUBSCRIPTION_ID  Tenant: $TENANT_ID  Repo: $GITHUB_REPO"
 echo "==> Registering resource providers"
 for rp in Microsoft.ContainerService Microsoft.ContainerRegistry Microsoft.DBforPostgreSQL \
           Microsoft.KeyVault Microsoft.Network Microsoft.OperationalInsights \
-          Microsoft.OperationsManagement Microsoft.Insights Microsoft.Storage; do
+          Microsoft.OperationsManagement Microsoft.Insights Microsoft.Storage \
+          Microsoft.ManagedIdentity; do
   az provider register --namespace "$rp" -o none
 done
 
 echo "==> Terraform state storage"
 az group create -n "$STATE_RG" -l "$LOCATION" -o none
+if [ -z "$STATE_SA" ]; then # reuse the account from an earlier run of this script
+  STATE_SA=$(az storage account list -g "$STATE_RG" --query "[?starts_with(name,'stfinnovatf')].name | [0]" -o tsv)
+fi
+STATE_SA="${STATE_SA:-stfinnovatf$(openssl rand -hex 3)}"
 if ! az storage account show -n "$STATE_SA" -g "$STATE_RG" -o none 2>/dev/null; then
   az storage account create -n "$STATE_SA" -g "$STATE_RG" -l "$LOCATION" \
     --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
@@ -41,28 +46,27 @@ az storage account blob-service-properties update --account-name "$STATE_SA" -g 
 az storage container-rm create --storage-account "$STATE_SA" -g "$STATE_RG" -n tfstate -o none 2>/dev/null || true
 SA_ID=$(az storage account show -n "$STATE_SA" -g "$STATE_RG" --query id -o tsv)
 
-echo "==> App registration / service principal"
-APP_ID=$(az ad app list --display-name "$APP_NAME" --query "[0].appId" -o tsv)
-if [ -z "$APP_ID" ]; then
-  APP_ID=$(az ad app create --display-name "$APP_NAME" --query appId -o tsv)
-fi
-az ad sp show --id "$APP_ID" -o none 2>/dev/null || az ad sp create --id "$APP_ID" -o none
-SP_OBJECT_ID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
+echo "==> Deployment identity (user-assigned managed identity)"
+# A managed identity lives in the subscription, so this works even when your
+# university tenant does not allow students to create Entra ID app registrations.
+az identity create -n "$IDENTITY_NAME" -g "$STATE_RG" -l "$LOCATION" -o none
+CLIENT_ID=$(az identity show -n "$IDENTITY_NAME" -g "$STATE_RG" --query clientId -o tsv)
+SP_OBJECT_ID=$(az identity show -n "$IDENTITY_NAME" -g "$STATE_RG" --query principalId -o tsv)
 
-echo "==> Federated credentials (GitHub OIDC)"
+echo "==> Federated credentials (GitHub OIDC - no passwords stored in GitHub)"
 add_fic() { # name subject
-  if ! az ad app federated-credential show --id "$APP_ID" --federated-credential-id "$1" -o none 2>/dev/null; then
-    az ad app federated-credential create --id "$APP_ID" -o none --parameters "{
-      \"name\": \"$1\",
-      \"issuer\": \"https://token.actions.githubusercontent.com\",
-      \"subject\": \"$2\",
-      \"audiences\": [\"api://AzureADTokenExchange\"]
-    }"
+  if ! az identity federated-credential show -n "$1" --identity-name "$IDENTITY_NAME" -g "$STATE_RG" -o none 2>/dev/null; then
+    az identity federated-credential create -n "$1" --identity-name "$IDENTITY_NAME" -g "$STATE_RG" \
+      --issuer "https://token.actions.githubusercontent.com" --subject "$2" \
+      --audiences "api://AzureADTokenExchange" -o none
   fi
 }
-add_fic gh-main               "repo:${GITHUB_REPO}:ref:refs/heads/main"        # build push, terraform plan on main
-add_fic gh-env-production     "repo:${GITHUB_REPO}:environment:production"     # terraform apply, release
-add_fic gh-pull-request       "repo:${GITHUB_REPO}:pull_request"               # terraform plan on PRs
+add_fic gh-main           "repo:${GITHUB_REPO}:ref:refs/heads/main"     # build push, terraform plan on main
+add_fic gh-env-production "repo:${GITHUB_REPO}:environment:production"  # terraform apply, release
+add_fic gh-pull-request   "repo:${GITHUB_REPO}:pull_request"            # terraform plan on PRs
+
+echo "    waiting 30s for the identity to replicate..."
+sleep 30
 
 echo "==> Role assignments (may take a minute to propagate)"
 assign() { # role scope
@@ -84,7 +88,7 @@ cat <<EOF
 
 ================ GitHub configuration ================
 Secrets  (Settings -> Secrets and variables -> Actions -> Secrets)
-  AZURE_CLIENT_ID        = $APP_ID
+  AZURE_CLIENT_ID        = $CLIENT_ID
   AZURE_TENANT_ID        = $TENANT_ID
   AZURE_SUBSCRIPTION_ID  = $SUBSCRIPTION_ID
 Variables (Settings -> Secrets and variables -> Actions -> Variables)
@@ -97,7 +101,7 @@ EOF
 
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   echo "==> Setting GitHub secrets/variables with gh"
-  gh secret   set AZURE_CLIENT_ID          -R "$GITHUB_REPO" -b "$APP_ID"
+  gh secret   set AZURE_CLIENT_ID          -R "$GITHUB_REPO" -b "$CLIENT_ID"
   gh secret   set AZURE_TENANT_ID          -R "$GITHUB_REPO" -b "$TENANT_ID"
   gh secret   set AZURE_SUBSCRIPTION_ID    -R "$GITHUB_REPO" -b "$SUBSCRIPTION_ID"
   gh variable set TF_STATE_RESOURCE_GROUP  -R "$GITHUB_REPO" -b "$STATE_RG"
