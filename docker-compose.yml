@@ -118,6 +118,37 @@ services:
     ports:
       - "3001:3001"
 
+  wallet-service:
+    build:
+      context: ./wallet-service
+      args:
+        NPM_CONFIG_STRICT_SSL: ${NPM_CONFIG_STRICT_SSL:-true}
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: finnova
+      DB_PASSWORD: finnova
+      DB_NAME: finnova
+      PORT: 3006
+      CUSTOMER_SERVICE_URL: http://customer-service:3002
+      ACCOUNT_SERVICE_URL: http://account-service:3000
+      PAYMENT_SERVICE_URL: http://payment-service:3001
+      LEDGER_SERVICE_URL: http://ledger-service:3005
+      NOTIFICATION_SERVICE_URL: http://notification-service:3004
+    depends_on:
+      postgres:
+        condition: service_healthy
+      customer-service:
+        condition: service_healthy
+      account-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+      ledger-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+
   api-gateway:
     build:
       context: .
@@ -127,6 +158,7 @@ services:
       - payment-service
       - customer-service
       - identity-service
+      - wallet-service
     ports:
       - "8080:8080"
 
