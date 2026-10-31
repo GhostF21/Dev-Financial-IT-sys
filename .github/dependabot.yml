@@ -1,0 +1,22 @@
+# Opens pull requests when dependencies have security fixes or new versions,
+# so the "Dependency audit" step in Build does not suddenly start failing.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directories:
+      - /account-service
+      - /customer-service
+      - /identity-service
+      - /ledger-service
+      - /notification-service
+      - /payment-service
+      - /wallet-service
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
