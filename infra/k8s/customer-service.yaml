@@ -1,0 +1,71 @@
+# customer-service - production (AKS)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-service
+  labels: { app: customer-service }
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: { app: customer-service }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: customer-service, tier: backend }
+    spec:
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: customer-service }
+      containers:
+        - name: customer-service
+          image: finnova/customer-service   # tag/registry set by the release pipeline (kustomize edit set image)
+          ports:
+            - containerPort: 3002
+          env:
+            - name: PORT
+              value: "3002"
+          envFrom:
+            - configMapRef: { name: finnova-config }
+            - secretRef: { name: finnova-db }   # created by the release pipeline from Key Vault
+          readinessProbe:
+            httpGet: { path: /readyz, port: 3002 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 3002 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: customer-service
+  labels: { app: customer-service }
+spec:
+  type: ClusterIP
+  selector: { app: customer-service }
+  ports:
+    - port: 3002
+      targetPort: 3002
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: customer-service
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: customer-service }

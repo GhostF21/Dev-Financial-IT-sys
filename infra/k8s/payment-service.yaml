@@ -1,0 +1,71 @@
+# payment-service - production (AKS)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  labels: { app: payment-service }
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: { app: payment-service }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: payment-service, tier: backend }
+    spec:
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: payment-service }
+      containers:
+        - name: payment-service
+          image: finnova/payment-service   # tag/registry set by the release pipeline (kustomize edit set image)
+          ports:
+            - containerPort: 3001
+          env:
+            - name: PORT
+              value: "3001"
+          envFrom:
+            - configMapRef: { name: finnova-config }
+            - secretRef: { name: finnova-db }   # created by the release pipeline from Key Vault
+          readinessProbe:
+            httpGet: { path: /readyz, port: 3001 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 3001 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service
+  labels: { app: payment-service }
+spec:
+  type: ClusterIP
+  selector: { app: payment-service }
+  ports:
+    - port: 3001
+      targetPort: 3001
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payment-service
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: payment-service }
