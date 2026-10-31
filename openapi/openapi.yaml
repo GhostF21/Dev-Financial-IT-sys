@@ -3,8 +3,8 @@ info:
   title: FinNova Bank Digital Banking API
   description: >
     REST API for FinNova Bank's digital banking application. Supports customer
-    management, account opening, balance inquiries, payments, and transaction
-    history.
+    management, account opening, balance inquiries, payments, transaction
+    history, digital wallets, P2P transfers, and QR payments.
   version: 1.0.0
   contact:
     name: FinNova Bank API Team
@@ -28,6 +28,14 @@ tags:
     description: Payment creation
   - name: Transactions
     description: Transaction history
+  - name: Wallets
+    description: Digital wallet management, top-up and withdrawal through the payment gateway
+  - name: P2P Transfers
+    description: Peer-to-peer transfers between customer wallets
+  - name: QR Payments
+    description: QR code payment requests and payments
+  - name: Wallet History
+    description: Wallet payment history and payment gateway processing log
 
 paths:
   /customers:
@@ -345,7 +353,471 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /wallets:
+    post:
+      tags: [Wallets]
+      summary: Open a digital wallet for a customer
+      description: The customer must exist and have approved KYC. One wallet per customer and currency.
+      operationId: createWallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WalletCreateRequest'
+            example:
+              customerId: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+              currency: EUR
+      responses:
+        '201':
+          description: Wallet created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Customer already has a wallet in this currency
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    get:
+      tags: [Wallets]
+      summary: List a customer's wallets
+      operationId: listWallets
+      parameters:
+        - name: customerId
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Wallets owned by the customer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Wallet'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /wallets/{walletId}:
+    parameters:
+      - $ref: '#/components/parameters/WalletId'
+    get:
+      tags: [Wallets]
+      summary: Get wallet and balance
+      operationId: getWallet
+      responses:
+        '200':
+          description: Wallet details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Wallets]
+      summary: Freeze or reactivate a wallet
+      operationId: updateWalletStatus
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [ACTIVE, FROZEN]
+      responses:
+        '200':
+          description: Wallet updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /wallets/{walletId}/top-up:
+    parameters:
+      - $ref: '#/components/parameters/WalletId'
+    post:
+      tags: [Wallets]
+      summary: Top up a wallet through the payment gateway
+      description: >
+        BANK_ACCOUNT moves money from the owner's FinNova account to the wallet
+        settlement account through the Payment Service. CARD charges a card through
+        the sandbox card gateway. Test cards: 4242424242424242 (approved),
+        4000000000000002 (declined), 4000000000009995 (insufficient funds).
+      operationId: topUpWallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopUpRequest'
+            examples:
+              bank:
+                summary: From bank account
+                value:
+                  method: BANK_ACCOUNT
+                  bankAccountId: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                  amount: 250
+              card:
+                summary: By card
+                value:
+                  method: CARD
+                  amount: 50
+                  card: { number: '4242424242424242', expiryMonth: 12, expiryYear: 2030, cvc: '123' }
+      responses:
+        '201':
+          description: Top-up succeeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayOperationResponse'
+        '200':
+          description: Idempotent replay of an earlier top-up
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayOperationResponse'
+        '402':
+          description: Payment declined (card declined or insufficient funds)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayFailureResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /wallets/{walletId}/withdraw:
+    parameters:
+      - $ref: '#/components/parameters/WalletId'
+    post:
+      tags: [Wallets]
+      summary: Withdraw wallet funds to the owner's bank account
+      operationId: withdrawFromWallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WithdrawRequest'
+      responses:
+        '201':
+          description: Withdrawal succeeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayOperationResponse'
+        '402':
+          description: Insufficient wallet balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /wallets/transfers:
+    post:
+      tags: [P2P Transfers]
+      summary: Transfer funds between two customer wallets
+      description: Atomic debit and credit. Reusing an idempotencyKey returns the original transfer.
+      operationId: createWalletTransfer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WalletTransferRequest'
+            example:
+              fromWalletId: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+              toWalletId: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+              amount: 45
+              description: Dinner split
+              idempotencyKey: 9b2d1c1e-4c1a-4b8e-9f6e-2a7d4f0e8c11
+      responses:
+        '201':
+          description: Transfer completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletTransfer'
+        '200':
+          description: Idempotent replay of an earlier transfer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletTransfer'
+        '402':
+          description: Insufficient wallet balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Idempotency key reused with different data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /wallets/{walletId}/qr-payments:
+    parameters:
+      - $ref: '#/components/parameters/WalletId'
+    post:
+      tags: [QR Payments]
+      summary: Generate a QR code payment request
+      operationId: createQrPayment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QrPaymentCreateRequest'
+            example:
+              amount: 12.5
+              description: Coffee and croissant
+              expiresInMinutes: 15
+      responses:
+        '201':
+          description: QR payment request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QrPaymentWithCode'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    get:
+      tags: [QR Payments]
+      summary: List QR payment requests created by a wallet
+      operationId: listQrPayments
+      responses:
+        '200':
+          description: Most recent QR requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/QrPayment'
+
+  /qr-payments/{token}:
+    parameters:
+      - $ref: '#/components/parameters/QrToken'
+    get:
+      tags: [QR Payments]
+      summary: Look up a scanned QR code before paying
+      operationId: getQrPayment
+      responses:
+        '200':
+          description: QR payment request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QrPaymentWithCode'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /qr-payments/{token}/image.png:
+    parameters:
+      - $ref: '#/components/parameters/QrToken'
+    get:
+      tags: [QR Payments]
+      summary: QR code as a PNG image
+      operationId: getQrPaymentImage
+      responses:
+        '200':
+          description: PNG image
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /qr-payments/{token}/pay:
+    parameters:
+      - $ref: '#/components/parameters/QrToken'
+    post:
+      tags: [QR Payments]
+      summary: Pay a QR code from a wallet
+      description: A QR code can be paid only once and only before it expires.
+      operationId: payQrPayment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payerWalletId]
+              properties:
+                payerWalletId:
+                  type: string
+                  format: uuid
+      responses:
+        '201':
+          description: QR payment completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QrPaymentResult'
+        '402':
+          description: Insufficient wallet balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: QR code already paid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: QR code expired or cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /qr-payments/{token}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/QrToken'
+    post:
+      tags: [QR Payments]
+      summary: Cancel a pending QR payment request
+      operationId: cancelQrPayment
+      responses:
+        '200':
+          description: QR request cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QrPayment'
+        '409':
+          description: QR request is not pending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /wallets/{walletId}/transactions:
+    parameters:
+      - $ref: '#/components/parameters/WalletId'
+    get:
+      tags: [Wallet History]
+      summary: Wallet payment history
+      operationId: listWalletTransactions
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/WalletTransactionType'
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Paginated wallet transactions, newest first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletTransactionListResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /wallets/{walletId}/gateway-transactions:
+    parameters:
+      - $ref: '#/components/parameters/WalletId'
+    get:
+      tags: [Wallet History]
+      summary: Payment gateway processing log for a wallet
+      operationId: listGatewayTransactions
+      responses:
+        '200':
+          description: Top-ups and withdrawals processed by the payment gateway
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GatewayTransaction'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
 components:
+  parameters:
+    WalletId:
+      name: walletId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    QrToken:
+      name: token
+      in: path
+      required: true
+      description: QR token or the full QR content (finnova://pay?token=...)
+      schema:
+        type: string
+
   securitySchemes:
     bearerAuth:
       type: http
@@ -633,6 +1105,358 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Transaction'
+        pageInfo:
+          $ref: '#/components/schemas/PageInfo'
+
+    WalletCreateRequest:
+      type: object
+      required: [customerId]
+      properties:
+        customerId:
+          type: string
+          format: uuid
+        currency:
+          type: string
+          default: EUR
+
+    Wallet:
+      type: object
+      required: [id, customerId, currency, balance, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        customerId:
+          type: string
+          format: uuid
+        currency:
+          type: string
+        balance:
+          type: number
+          format: double
+        status:
+          type: string
+          enum: [ACTIVE, FROZEN]
+        createdAt:
+          type: string
+          format: date-time
+
+    CardDetails:
+      type: object
+      required: [number, expiryMonth, expiryYear, cvc]
+      properties:
+        number:
+          type: string
+          example: '4242424242424242'
+        expiryMonth:
+          type: integer
+          minimum: 1
+          maximum: 12
+        expiryYear:
+          type: integer
+        cvc:
+          type: string
+
+    TopUpRequest:
+      type: object
+      required: [method, amount]
+      properties:
+        method:
+          type: string
+          enum: [BANK_ACCOUNT, CARD]
+        amount:
+          type: number
+          format: double
+          minimum: 0.01
+        bankAccountId:
+          type: string
+          format: uuid
+          description: Required for BANK_ACCOUNT. Must belong to the wallet owner.
+        card:
+          $ref: '#/components/schemas/CardDetails'
+        description:
+          type: string
+        idempotencyKey:
+          type: string
+
+    WithdrawRequest:
+      type: object
+      required: [bankAccountId, amount]
+      properties:
+        bankAccountId:
+          type: string
+          format: uuid
+        amount:
+          type: number
+          format: double
+          minimum: 0.01
+        idempotencyKey:
+          type: string
+
+    GatewayTransaction:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        walletId:
+          type: string
+          format: uuid
+        operation:
+          type: string
+          enum: [TOP_UP, WITHDRAWAL]
+        method:
+          type: string
+          enum: [BANK_ACCOUNT, CARD]
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [PROCESSING, SUCCEEDED, FAILED]
+        bankAccountId:
+          type: string
+          format: uuid
+          nullable: true
+        cardBrand:
+          type: string
+          nullable: true
+        cardLast4:
+          type: string
+          nullable: true
+        gatewayReference:
+          type: string
+          nullable: true
+          description: Payment Service payment ID or card gateway charge ID
+        failureCode:
+          type: string
+          nullable: true
+        failureMessage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    GatewayOperationResponse:
+      type: object
+      properties:
+        gatewayTransaction:
+          $ref: '#/components/schemas/GatewayTransaction'
+        wallet:
+          $ref: '#/components/schemas/Wallet'
+        transaction:
+          $ref: '#/components/schemas/WalletTransaction'
+
+    GatewayFailureResponse:
+      allOf:
+        - $ref: '#/components/schemas/Error'
+        - type: object
+          properties:
+            gatewayTransaction:
+              $ref: '#/components/schemas/GatewayTransaction'
+
+    WalletTransferRequest:
+      type: object
+      required: [fromWalletId, toWalletId, amount]
+      properties:
+        fromWalletId:
+          type: string
+          format: uuid
+        toWalletId:
+          type: string
+          format: uuid
+        amount:
+          type: number
+          format: double
+          minimum: 0.01
+        description:
+          type: string
+          maxLength: 255
+        idempotencyKey:
+          type: string
+
+    WalletTransfer:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        fromWalletId:
+          type: string
+          format: uuid
+        toWalletId:
+          type: string
+          format: uuid
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+        type:
+          type: string
+          enum: [P2P, QR_PAYMENT]
+        description:
+          type: string
+          nullable: true
+        qrPaymentId:
+          type: string
+          format: uuid
+          nullable: true
+        idempotencyKey:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [COMPLETED]
+        createdAt:
+          type: string
+          format: date-time
+        fromWallet:
+          $ref: '#/components/schemas/Wallet'
+        toWallet:
+          $ref: '#/components/schemas/Wallet'
+
+    QrPaymentCreateRequest:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          type: number
+          format: double
+          minimum: 0.01
+        description:
+          type: string
+          maxLength: 255
+        expiresInMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 15
+
+    QrPayment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        token:
+          type: string
+        payeeWalletId:
+          type: string
+          format: uuid
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+        description:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [PENDING, PAID, EXPIRED, CANCELLED]
+        expiresAt:
+          type: string
+          format: date-time
+        paidByWalletId:
+          type: string
+          format: uuid
+          nullable: true
+        transferId:
+          type: string
+          format: uuid
+          nullable: true
+        paidAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    QrPaymentWithCode:
+      allOf:
+        - $ref: '#/components/schemas/QrPayment'
+        - type: object
+          properties:
+            qrPayload:
+              type: string
+              example: finnova://pay?token=Zx8Kf2...
+            qrCodeDataUrl:
+              type: string
+              description: PNG image of the QR code as a data URL
+
+    QrPaymentResult:
+      type: object
+      properties:
+        qrPayment:
+          $ref: '#/components/schemas/QrPayment'
+        transfer:
+          $ref: '#/components/schemas/WalletTransfer'
+        payerWallet:
+          $ref: '#/components/schemas/Wallet'
+        payeeWallet:
+          $ref: '#/components/schemas/Wallet'
+
+    WalletTransactionType:
+      type: string
+      enum: [TOP_UP, WITHDRAWAL, REVERSAL, P2P_SENT, P2P_RECEIVED, QR_PAYMENT_SENT, QR_PAYMENT_RECEIVED]
+
+    WalletTransaction:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        walletId:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/WalletTransactionType'
+        direction:
+          type: string
+          enum: [CREDIT, DEBIT]
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+        balanceAfter:
+          type: number
+          format: double
+        counterpartyWalletId:
+          type: string
+          format: uuid
+          nullable: true
+        referenceId:
+          type: string
+          format: uuid
+          nullable: true
+        paymentMethod:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+
+    WalletTransactionListResponse:
+      type: object
+      required: [data, pageInfo]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/WalletTransaction'
         pageInfo:
           $ref: '#/components/schemas/PageInfo'
 

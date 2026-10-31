@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FinNova Wallet</title>
+  <style>
+    :root {
+      --bg: #f3f5f8; --surface: #ffffff; --ink: #14213d; --muted: #5b6577; --line: #e2e6ee;
+      --brand: #0b3d91; --brand-ink: #ffffff; --accent: #00a389; --danger: #c62f3d; --warn: #b7791f;
+      --credit: #0f8a5f; --debit: #b42335; --radius: 14px; --shadow: 0 1px 2px rgba(20,33,61,.06), 0 4px 16px rgba(20,33,61,.06);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    header { background: var(--brand); color: var(--brand-ink); }
+    .bar { max-width: 1120px; margin: 0 auto; padding: 14px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .logo { font-weight: 700; font-size: 18px; letter-spacing: .2px; display: flex; align-items: center; gap: 8px; }
+    .logo span { background: var(--accent); border-radius: 8px; width: 28px; height: 28px; display: inline-grid; place-items: center; font-size: 15px; }
+    .bar .spacer { flex: 1; }
+    .bar select { width: auto; background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.3); border-radius: 8px; padding: 6px 10px; max-width: 100%; }
+    .bar select option { color: var(--ink); }
+    .bar a { color: #cfe0ff; font-size: 13px; }
+    main { max-width: 1120px; margin: 0 auto; padding: 20px 16px 48px; display: grid; gap: 18px; grid-template-columns: 340px minmax(0, 1fr); }
+    main > * { min-width: 0; }
+    @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+    .card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; }
+    h2 { font-size: 15px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+    h3 { font-size: 17px; margin: 0 0 10px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+    input, select, textarea { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; font: inherit; background: #fff; color: var(--ink); }
+    input:focus, select:focus, textarea:focus { outline: 2px solid #9ec0ff; border-color: #6b9cff; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+    button { font: inherit; border: 0; border-radius: 9px; padding: 10px 16px; cursor: pointer; background: var(--brand); color: #fff; font-weight: 600; }
+    button.secondary { background: #e8eef9; color: var(--brand); }
+    button.ghost { background: transparent; color: var(--brand); padding: 4px 8px; font-weight: 500; }
+    button.danger { background: #fbe9eb; color: var(--danger); }
+    button:disabled { opacity: .55; cursor: progress; }
+    .actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+    .balance-card { background: linear-gradient(135deg, #0b3d91, #1257c9 60%, #00a389); color: #fff; }
+    .balance-card h2 { color: rgba(255,255,255,.75); }
+    .balance { font-size: 38px; font-weight: 700; letter-spacing: -.5px; margin: 2px 0 6px; font-variant-numeric: tabular-nums; }
+    .meta { font-size: 12.5px; opacity: .85; word-break: break-all; }
+    .meta b { font-weight: 600; }
+    .pill { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; letter-spacing: .3px; }
+    .pill.ok { background: #d9f5ec; color: #0b6e4f; } .pill.fail { background: #fbe1e4; color: #a01d2c; }
+    .pill.pending { background: #fff1d6; color: #8a5a00; } .pill.neutral { background: #e8ecf3; color: #3d4757; }
+    .balance-card .pill { background: rgba(255,255,255,.2); color: #fff; }
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: -4px -4px 16px; overflow-x: auto; }
+    .tab { background: none; color: var(--muted); border-radius: 8px 8px 0 0; padding: 10px 14px; font-weight: 600; white-space: nowrap; border-bottom: 3px solid transparent; }
+    .tab.active { color: var(--brand); border-bottom-color: var(--brand); }
+    .panel { display: none; } .panel.active { display: block; }
+    .seg { display: inline-flex; background: #eef1f6; border-radius: 10px; padding: 3px; margin-bottom: 6px; }
+    .seg button { background: none; color: var(--muted); padding: 7px 14px; }
+    .seg button.active { background: #fff; color: var(--ink); box-shadow: var(--shadow); }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); font-weight: 600; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+    td { padding: 10px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .credit { color: var(--credit); font-weight: 600; } .debit { color: var(--debit); font-weight: 600; }
+    .small { font-size: 12.5px; color: var(--muted); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; word-break: break-all; }
+    .table-wrap { overflow-x: auto; }
+    .qr-box { display: grid; grid-template-columns: 220px 1fr; gap: 18px; align-items: start; margin-top: 16px; padding: 14px; border: 1px dashed var(--line); border-radius: 12px; }
+    @media (max-width: 560px) { .qr-box { grid-template-columns: 1fr; } .row, .row3 { grid-template-columns: 1fr; } }
+    .qr-box img { width: 220px; max-width: 100%; border-radius: 10px; border: 1px solid var(--line); }
+    .preview { margin-top: 14px; padding: 14px; border-radius: 12px; background: #f6f8fc; border: 1px solid var(--line); }
+    .preview .amt { font-size: 28px; font-weight: 700; }
+    .empty { color: var(--muted); text-align: center; padding: 24px 0; }
+    .hint { font-size: 12.5px; color: var(--muted); background: #f6f8fc; border-radius: 9px; padding: 8px 10px; margin-top: 10px; }
+    .result { margin-top: 14px; padding: 12px 14px; border-radius: 10px; font-size: 14px; display: none; }
+    .result.ok { display: block; background: #e6f7f1; color: #0b5e44; border: 1px solid #b6e6d4; }
+    .result.fail { display: block; background: #fdecee; color: #8e1a28; border: 1px solid #f3c2c8; }
+    #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 32px); }
+    #toast.show { opacity: 1; }
+    video { width: 100%; max-width: 320px; border-radius: 10px; margin-top: 10px; display: none; }
+    .wallet-list { list-style: none; margin: 0; padding: 0; }
+    .wallet-list li { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); gap: 8px; }
+    .wallet-list li:last-child { border-bottom: 0; }
+  </style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="logo"><span>F</span> FinNova Wallet</div>
+    <div class="spacer"></div>
+    <select id="walletSwitcher" aria-label="Active wallet"></select>
+    <a href="/docs/" target="_blank" rel="noopener">API docs</a>
+  </div>
+</header>
+
+<main>
+  <!-- Left column: wallet summary and setup -->
+  <div style="display:grid; gap:18px; align-content:start;">
+    <section class="card balance-card" id="balanceCard">
+      <h2>Wallet balance</h2>
+      <div class="balance" id="balance">0.00</div>
+      <div class="meta" id="walletMeta">No wallet selected. Create one below.</div>
+      <div class="actions"><button class="secondary" id="refreshBtn" style="background:rgba(255,255,255,.18);color:#fff">Refresh</button>
+        <button class="secondary" id="copyIdBtn" style="background:rgba(255,255,255,.18);color:#fff">Copy wallet ID</button></div>
+    </section>
+
+    <section class="card">
+      <h2>Open a wallet</h2>
+      <div class="seg" id="setupSeg">
+        <button class="active" data-mode="new">New customer</button>
+        <button data-mode="existing">Existing</button>
+      </div>
+      <form id="newCustomerForm">
+        <div class="row">
+          <div><label for="firstName">First name</label><input id="firstName" required value="Anna" /></div>
+          <div><label for="lastName">Last name</label><input id="lastName" required value="Kovács" /></div>
+        </div>
+        <label for="email">Email</label><input id="email" type="email" required />
+        <div class="row">
+          <div><label for="deposit">Bank deposit (EUR)</label><input id="deposit" type="number" min="0" step="0.01" value="1000" /></div>
+          <div><label for="currency">Currency</label><select id="currency"><option>EUR</option><option>HUF</option><option>USD</option></select></div>
+        </div>
+        <div class="hint">Creates the customer, approves KYC, opens a bank account, and opens a digital wallet through the API gateway.</div>
+        <div class="actions"><button type="submit">Create customer &amp; wallet</button></div>
+      </form>
+      <form id="existingForm" style="display:none">
+        <label for="existingCustomer">Customer ID</label><input id="existingCustomer" class="mono" placeholder="uuid" />
+        <label for="existingAccount">Bank account ID (optional, for top-ups)</label><input id="existingAccount" class="mono" placeholder="uuid" />
+        <div class="actions"><button type="submit">Open / load wallet</button></div>
+      </form>
+      <div class="result" id="setupResult"></div>
+    </section>
+
+    <section class="card">
+      <h2>Saved wallets</h2>
+      <ul class="wallet-list" id="walletList"></ul>
+    </section>
+  </div>
+
+  <!-- Right column: features -->
+  <section class="card">
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="topup">Top up</button>
+      <button class="tab" data-tab="send">Send (P2P)</button>
+      <button class="tab" data-tab="request">Request via QR</button>
+      <button class="tab" data-tab="scan">Scan &amp; pay</button>
+      <button class="tab" data-tab="history">History</button>
+      <button class="tab" data-tab="gateway">Payment processing</button>
+    </nav>
+
+    <!-- Top up / withdraw -->
+    <div class="panel active" id="panel-topup">
+      <h3 id="topupTitle">Add money to your wallet</h3>
+      <div class="seg" id="methodSeg">
+        <button class="active" data-method="BANK_ACCOUNT">Bank account</button>
+        <button data-method="CARD">Debit / credit card</button>
+        <button data-method="WITHDRAW">Withdraw</button>
+      </div>
+      <form id="topupForm">
+        <div id="bankFields">
+          <label for="bankAccount">FinNova bank account</label>
+          <input id="bankAccount" class="mono" placeholder="Bank account ID" />
+          <div class="small" id="bankBalance"></div>
+        </div>
+        <div id="cardFields" style="display:none">
+          <label for="cardNumber">Card number</label><input id="cardNumber" inputmode="numeric" value="4242 4242 4242 4242" />
+          <div class="row3">
+            <div><label for="expMonth">Exp. month</label><input id="expMonth" type="number" min="1" max="12" value="12" /></div>
+            <div><label for="expYear">Exp. year</label><input id="expYear" type="number" min="2024" value="2030" /></div>
+            <div><label for="cvc">CVC</label><input id="cvc" inputmode="numeric" value="123" /></div>
+          </div>
+          <div class="hint">Sandbox gateway test cards: <span class="mono">4242 4242 4242 4242</span> approved, <span class="mono">4000 0000 0000 0002</span> declined, <span class="mono">4000 0000 0000 9995</span> insufficient funds.</div>
+        </div>
+        <label for="topupAmount">Amount</label><input id="topupAmount" type="number" min="0.01" step="0.01" value="250" required />
+        <div class="actions"><button type="submit" id="topupBtn">Top up wallet</button></div>
+      </form>
+      <div class="result" id="topupResult"></div>
+    </div>
+
+    <!-- P2P -->
+    <div class="panel" id="panel-send">
+      <h3>Send money to another wallet</h3>
+      <form id="sendForm">
+        <label for="recipientSelect">Recipient</label>
+        <select id="recipientSelect"></select>
+        <label for="recipientId">Recipient wallet ID</label>
+        <input id="recipientId" class="mono" placeholder="Paste a wallet ID or choose above" required />
+        <div class="row">
+          <div><label for="sendAmount">Amount</label><input id="sendAmount" type="number" min="0.01" step="0.01" value="45.00" required /></div>
+          <div><label for="sendNote">Note</label><input id="sendNote" maxlength="255" value="Dinner split" /></div>
+        </div>
+        <div class="hint">Transfers are atomic and idempotent. A retry with the same request never charges twice.</div>
+        <div class="actions"><button type="submit">Send money</button></div>
+      </form>
+      <div class="result" id="sendResult"></div>
+    </div>
+
+    <!-- QR request -->
+    <div class="panel" id="panel-request">
+      <h3>Request a payment with a QR code</h3>
+      <form id="qrForm">
+        <div class="row3">
+          <div><label for="qrAmount">Amount</label><input id="qrAmount" type="number" min="0.01" step="0.01" value="12.50" required /></div>
+          <div style="grid-column: span 2"><label for="qrNote">Description</label><input id="qrNote" maxlength="255" value="Coffee and croissant" /></div>
+        </div>
+        <label for="qrTtl">Valid for</label>
+        <select id="qrTtl"><option value="5">5 minutes</option><option value="15" selected>15 minutes</option><option value="60">1 hour</option><option value="1440">24 hours</option></select>
+        <div class="actions"><button type="submit">Generate QR code</button></div>
+      </form>
+      <div id="qrOutput"></div>
+      <h3 style="margin-top:22px">Recent QR requests</h3>
+      <div class="table-wrap"><table><thead><tr><th>Created</th><th>Description</th><th>Status</th><th class="num">Amount</th></tr></thead><tbody id="qrList"></tbody></table></div>
+    </div>
+
+    <!-- Scan and pay -->
+    <div class="panel" id="panel-scan">
+      <h3>Scan a QR code and pay</h3>
+      <div class="actions" style="margin-top:0">
+        <label class="secondary" style="margin:0"><input type="file" id="qrFile" accept="image/*" style="display:none" />
+          <span class="secondary" style="display:inline-block;background:#e8eef9;color:var(--brand);padding:10px 16px;border-radius:9px;font-weight:600;font-size:15px;cursor:pointer">Upload QR image</span></label>
+        <button class="secondary" id="cameraBtn" type="button">Use camera</button>
+      </div>
+      <video id="camera" playsinline muted></video>
+      <canvas id="scanCanvas" style="display:none"></canvas>
+      <label for="qrPayloadInput">Or paste the QR content</label>
+      <div class="row" style="grid-template-columns: 1fr auto;">
+        <input id="qrPayloadInput" class="mono" placeholder="finnova://pay?token=..." />
+        <button class="secondary" id="lookupBtn" type="button">Look up</button>
+      </div>
+      <div id="payPreview"></div>
+      <div class="result" id="payResult"></div>
+    </div>
+
+    <!-- History -->
+    <div class="panel" id="panel-history">
+      <div style="display:flex; justify-content:space-between; align-items:end; gap:10px; flex-wrap:wrap;">
+        <h3 style="margin:0">Payment history</h3>
+        <select id="historyFilter" style="width:auto">
+          <option value="">All transactions</option><option value="TOP_UP">Top-ups</option><option value="WITHDRAWAL">Withdrawals</option>
+          <option value="P2P_SENT">P2P sent</option><option value="P2P_RECEIVED">P2P received</option>
+          <option value="QR_PAYMENT_SENT">QR paid</option><option value="QR_PAYMENT_RECEIVED">QR received</option>
+        </select>
+      </div>
+      <div class="table-wrap" style="margin-top:12px"><table>
+        <thead><tr><th>Date</th><th>Type</th><th>Details</th><th class="num">Amount</th><th class="num">Balance</th></tr></thead>
+        <tbody id="historyBody"></tbody></table></div>
+      <div class="actions" style="justify-content:space-between; align-items:center">
+        <span class="small" id="historyInfo"></span>
+        <span><button class="secondary" id="prevPage">Previous</button> <button class="secondary" id="nextPage">Next</button></span>
+      </div>
+    </div>
+
+    <!-- Gateway log -->
+    <div class="panel" id="panel-gateway">
+      <h3>Payment gateway transactions</h3>
+      <p class="small" style="margin-top:-4px">Every top-up and withdrawal goes through the payment gateway: bank transfers via the FinNova Payment Service, card charges via the sandbox card gateway.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Date</th><th>Operation</th><th>Method</th><th>Status</th><th>Gateway reference</th><th class="num">Amount</th></tr></thead>
+        <tbody id="gatewayBody"></tbody></table></div>
+    </div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script src="jsQR.js"></script>
+<script>
+(() => {
+  const API = '';
+  const STORE_KEY = 'finnova.wallets.v1';
+  const $ = (id) => document.getElementById(id);
+  const state = { wallets: loadWallets(), activeId: null, wallet: null, method: 'BANK_ACCOUNT', page: 1, totalPages: 1, scanned: null, cameraStream: null };
+
+  // ---------- storage (per browser convenience only) ----------
+  function loadWallets() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch { return []; } }
+  function saveWallets() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state.wallets)); localStorage.setItem(STORE_KEY + '.active', state.activeId || ''); } catch {} }
+  function savedActive() { try { return localStorage.getItem(STORE_KEY + '.active'); } catch { return null; } }
+
+  // ---------- helpers ----------
+  async function api(method, path, body) {
+    const res = await fetch(API + path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { const err = new Error(data.message || `Request failed (${res.status})`); err.data = data; err.status = res.status; throw err; }
+    return data;
+  }
+  const money = (v, c) => new Intl.NumberFormat('en-GB', { style: 'currency', currency: c || 'EUR' }).format(v);
+  const when = (t) => new Date(t).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const short = (id) => id ? `${id.slice(0, 8)}…` : '';
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }));
+  function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2600); }
+  function result(id, ok, html) { const el = $(id); el.className = 'result ' + (ok ? 'ok' : 'fail'); el.innerHTML = html; }
+  function clearResult(id) { $(id).className = 'result'; $(id).innerHTML = ''; }
+  function nameOf(walletId) { const w = state.wallets.find((x) => x.walletId === walletId); return w ? w.name : short(walletId); }
+  function statusPill(s) { const cls = { SUCCEEDED: 'ok', PAID: 'ok', COMPLETED: 'ok', ACTIVE: 'ok', FAILED: 'fail', EXPIRED: 'fail', CANCELLED: 'neutral', PENDING: 'pending', PROCESSING: 'pending', FROZEN: 'fail' }[s] || 'neutral'; return `<span class="pill ${cls}">${esc(s)}</span>`; }
+  async function busy(btn, fn) { btn.disabled = true; try { await fn(); } finally { btn.disabled = false; } }
+  function requireWallet() { if (!state.wallet) { toast('Create or select a wallet first'); return false; } return true; }
+
+  const TYPE_LABEL = { TOP_UP: 'Top-up', WITHDRAWAL: 'Withdrawal', REVERSAL: 'Reversal', P2P_SENT: 'Sent', P2P_RECEIVED: 'Received', QR_PAYMENT_SENT: 'QR payment', QR_PAYMENT_RECEIVED: 'QR received' };
+
+  // ---------- wallet selection ----------
+  function renderWalletChrome() {
+    const sw = $('walletSwitcher');
+    sw.innerHTML = state.wallets.length ? state.wallets.map((w) => `<option value="${w.walletId}" ${w.walletId === state.activeId ? 'selected' : ''}>${esc(w.name)} · ${w.currency}</option>`).join('') : '<option>No wallets yet</option>';
+    $('walletList').innerHTML = state.wallets.length ? state.wallets.map((w) => `<li><span><b>${esc(w.name)}</b><br><span class="mono">${w.walletId}</span></span>
+      <span><button class="ghost" data-use="${w.walletId}">${w.walletId === state.activeId ? 'Active' : 'Use'}</button><button class="ghost" data-forget="${w.walletId}" title="Remove from this browser">✕</button></span></li>`).join('') : '<li class="small">Wallets you create here are remembered in this browser.</li>';
+    const others = state.wallets.filter((w) => w.walletId !== state.activeId);
+    $('recipientSelect').innerHTML = '<option value="">Choose a saved wallet…</option>' + others.map((w) => `<option value="${w.walletId}">${esc(w.name)} (${w.currency})</option>`).join('');
+  }
+
+  async function selectWallet(id) {
+    state.activeId = id; saveWallets(); renderWalletChrome();
+    const saved = state.wallets.find((w) => w.walletId === id);
+    $('bankAccount').value = saved?.bankAccountId || '';
+    state.page = 1; state.scanned = null; $('payPreview').innerHTML = ''; $('qrOutput').innerHTML = '';
+    ['topupResult', 'sendResult', 'payResult'].forEach(clearResult);
+    await refresh();
+  }
+
+  async function refresh() {
+    if (!state.activeId) { $('balance').textContent = '0.00'; return; }
+    try {
+      state.wallet = await api('GET', `/wallets/${state.activeId}`);
+      const saved = state.wallets.find((w) => w.walletId === state.activeId);
+      $('balance').textContent = money(state.wallet.balance, state.wallet.currency);
+      $('walletMeta').innerHTML = `<b>${esc(saved?.name || 'Wallet')}</b> ${statusPill(state.wallet.status)}<br>Wallet <span class="mono">${state.wallet.id}</span><br>Customer <span class="mono">${state.wallet.customerId}</span>`;
+      await Promise.all([loadHistory(), loadGateway(), loadQrList(), loadBankBalance()]);
+    } catch (e) { $('walletMeta').textContent = e.message; }
+  }
+
+  async function loadBankBalance() {
+    const id = $('bankAccount').value.trim();
+    if (!id) { $('bankBalance').textContent = ''; return; }
+    try { const a = await api('GET', `/accounts/${id}`); $('bankBalance').textContent = `${a.accountType} ${a.accountNumber} · available ${money(a.balance, a.currency)}`; }
+    catch { $('bankBalance').textContent = 'Bank account not found'; }
+  }
+
+  // ---------- setup ----------
+  $('email').value = `anna.kovacs.${Date.now().toString(36)}@example.com`;
+  $('setupSeg').addEventListener('click', (e) => {
+    const mode = e.target.dataset.mode; if (!mode) return;
+    [...$('setupSeg').children].forEach((b) => b.classList.toggle('active', b === e.target));
+    $('newCustomerForm').style.display = mode === 'new' ? '' : 'none';
+    $('existingForm').style.display = mode === 'existing' ? '' : 'none';
+  });
+
+  $('newCustomerForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    busy(e.submitter, async () => {
+      clearResult('setupResult');
+      try {
+        const currency = $('currency').value;
+        const customer = await api('POST', '/customers', { firstName: $('firstName').value.trim(), lastName: $('lastName').value.trim(), email: $('email').value.trim(), dateOfBirth: '1994-06-21' });
+        await api('POST', `/customers/${customer.id}/kyc`, { documentType: 'PASSPORT', result: 'APPROVED' });
+        const account = await api('POST', '/accounts', { customerId: customer.id, accountType: 'CHECKING', currency, initialDeposit: Number($('deposit').value || 0) });
+        const wallet = await api('POST', '/wallets', { customerId: customer.id, currency });
+        state.wallets.push({ walletId: wallet.id, customerId: customer.id, bankAccountId: account.id, name: `${customer.firstName} ${customer.lastName}`, currency });
+        result('setupResult', true, `Wallet opened for <b>${esc(customer.firstName)} ${esc(customer.lastName)}</b>. KYC approved, bank account ${esc(account.accountNumber)} linked.`);
+        $('email').value = `${$('firstName').value.toLowerCase()}.${Date.now().toString(36)}@example.com`.replace(/[^a-z0-9.@]/g, '');
+        await selectWallet(wallet.id);
+      } catch (err) { result('setupResult', false, esc(err.message)); }
+    });
+  });
+
+  $('existingForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    busy(e.submitter, async () => {
+      clearResult('setupResult');
+      const customerId = $('existingCustomer').value.trim();
+      try {
+        let wallets = await api('GET', `/wallets?customerId=${encodeURIComponent(customerId)}`);
+        if (!wallets.length) wallets = [await api('POST', '/wallets', { customerId, currency: 'EUR' })];
+        const customer = await api('GET', `/customers/${customerId}`).catch(() => ({}));
+        for (const w of wallets) {
+          if (!state.wallets.some((s) => s.walletId === w.id)) state.wallets.push({ walletId: w.id, customerId, bankAccountId: $('existingAccount').value.trim(), name: customer.firstName ? `${customer.firstName} ${customer.lastName}` : short(customerId), currency: w.currency });
+        }
+        result('setupResult', true, `Loaded ${wallets.length} wallet(s).`);
+        await selectWallet(wallets[0].id);
+      } catch (err) { result('setupResult', false, esc(err.message)); }
+    });
+  });
+
+  $('walletSwitcher').addEventListener('change', (e) => selectWallet(e.target.value));
+  $('walletList').addEventListener('click', (e) => {
+    if (e.target.dataset.use) selectWallet(e.target.dataset.use);
+    if (e.target.dataset.forget) {
+      state.wallets = state.wallets.filter((w) => w.walletId !== e.target.dataset.forget);
+      if (state.activeId === e.target.dataset.forget) { state.activeId = state.wallets[0]?.walletId || null; state.wallet = null; }
+      saveWallets(); state.activeId ? selectWallet(state.activeId) : renderWalletChrome();
+    }
+  });
+  $('refreshBtn').addEventListener('click', () => refresh().then(() => toast('Updated')));
+  $('copyIdBtn').addEventListener('click', () => { if (state.activeId) navigator.clipboard?.writeText(state.activeId).then(() => toast('Wallet ID copied'), () => toast(state.activeId)); });
+
+  // ---------- tabs ----------
+  document.querySelector('.tabs').addEventListener('click', (e) => {
+    const tab = e.target.dataset.tab; if (!tab) return;
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === e.target));
+    document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${tab}`));
+    if (tab !== 'scan') stopCamera();
+  });
+
+  // ---------- top up / withdraw ----------
+  $('methodSeg').addEventListener('click', (e) => {
+    const m = e.target.dataset.method; if (!m) return;
+    state.method = m;
+    [...$('methodSeg').children].forEach((b) => b.classList.toggle('active', b === e.target));
+    $('cardFields').style.display = m === 'CARD' ? '' : 'none';
+    $('bankFields').style.display = m === 'CARD' ? 'none' : '';
+    $('topupBtn').textContent = m === 'WITHDRAW' ? 'Withdraw to bank account' : 'Top up wallet';
+    $('topupTitle').textContent = m === 'WITHDRAW' ? 'Withdraw to your bank account' : 'Add money to your wallet';
+    clearResult('topupResult');
+  });
+  $('bankAccount').addEventListener('change', loadBankBalance);
+
+  $('topupForm').addEventListener('submit', (e) => {
+    e.preventDefault(); if (!requireWallet()) return;
+    busy($('topupBtn'), async () => {
+      const amount = Number($('topupAmount').value);
+      const idempotencyKey = uuid();
+      try {
+        let out;
+        if (state.method === 'WITHDRAW') {
+          out = await api('POST', `/wallets/${state.activeId}/withdraw`, { bankAccountId: $('bankAccount').value.trim(), amount, idempotencyKey });
+        } else if (state.method === 'CARD') {
+          out = await api('POST', `/wallets/${state.activeId}/top-up`, { method: 'CARD', amount, idempotencyKey,
+            card: { number: $('cardNumber').value, expiryMonth: Number($('expMonth').value), expiryYear: Number($('expYear').value), cvc: $('cvc').value } });
+        } else {
+          out = await api('POST', `/wallets/${state.activeId}/top-up`, { method: 'BANK_ACCOUNT', bankAccountId: $('bankAccount').value.trim(), amount, idempotencyKey });
+        }
+        const g = out.gatewayTransaction;
+        result('topupResult', true, `${statusPill(g.status)} ${g.operation === 'WITHDRAWAL' ? 'Withdrew' : 'Added'} <b>${money(g.amount, g.currency)}</b> via ${g.method === 'CARD' ? `${esc(g.cardBrand)} ****${esc(g.cardLast4)}` : 'bank transfer'}.<br><span class="small">Gateway reference <span class="mono">${esc(g.gatewayReference)}</span> · New balance ${money(out.wallet.balance, out.wallet.currency)}</span>`);
+      } catch (err) {
+        const g = err.data?.gatewayTransaction;
+        result('topupResult', false, `${g ? statusPill(g.status) + ' ' : ''}<b>${esc(err.data?.code || 'ERROR')}</b>: ${esc(err.message)}`);
+      }
+      await refresh();
+    });
+  });
+
+  // ---------- P2P ----------
+  $('recipientSelect').addEventListener('change', (e) => { if (e.target.value) $('recipientId').value = e.target.value; });
+  $('sendForm').addEventListener('submit', (e) => {
+    e.preventDefault(); if (!requireWallet()) return;
+    busy(e.submitter, async () => {
+      try {
+        const t = await api('POST', '/wallets/transfers', { fromWalletId: state.activeId, toWalletId: $('recipientId').value.trim(), amount: Number($('sendAmount').value), description: $('sendNote').value, idempotencyKey: uuid() });
+        result('sendResult', true, `${statusPill(t.status)} Sent <b>${money(t.amount, t.currency)}</b> to ${esc(nameOf(t.toWalletId))}.<br><span class="small">Transfer <span class="mono">${t.id}</span> · Your balance ${money(t.fromWallet.balance, t.currency)}</span>`);
+      } catch (err) { result('sendResult', false, `<b>${esc(err.data?.code || 'ERROR')}</b>: ${esc(err.message)}`); }
+      await refresh();
+    });
+  });
+
+  // ---------- QR request ----------
+  let qrPoll = null;
+  $('qrForm').addEventListener('submit', (e) => {
+    e.preventDefault(); if (!requireWallet()) return;
+    busy(e.submitter, async () => {
+      try {
+        const qr = await api('POST', `/wallets/${state.activeId}/qr-payments`, { amount: Number($('qrAmount').value), description: $('qrNote').value, expiresInMinutes: Number($('qrTtl').value) });
+        renderQr(qr); loadQrList();
+        clearInterval(qrPoll);
+        qrPoll = setInterval(async () => {
+          try { const s = await api('GET', `/qr-payments/${qr.token}`); renderQrStatus(s); if (s.status !== 'PENDING') { clearInterval(qrPoll); refresh(); } } catch { clearInterval(qrPoll); }
+        }, 3000);
+      } catch (err) { $('qrOutput').innerHTML = `<div class="result fail">${esc(err.message)}</div>`; }
+    });
+  });
+  function renderQr(qr) {
+    $('qrOutput').innerHTML = `<div class="qr-box"><img src="${qr.qrCodeDataUrl}" alt="Payment QR code" />
+      <div><div class="small">Pay to</div><b>${esc(nameOf(qr.payeeWalletId))}</b>
+      <div class="preview" style="margin-top:8px"><div class="amt">${money(qr.amount, qr.currency)}</div><div>${esc(qr.description || '')}</div></div>
+      <p class="small">Status: <span id="qrStatus">${statusPill(qr.status)}</span> · expires ${when(qr.expiresAt)}</p>
+      <div class="mono">${esc(qr.qrPayload)}</div>
+      <div class="actions"><a download="finnova-qr-${qr.token.slice(0, 8)}.png" href="${qr.qrCodeDataUrl}"><button class="secondary" type="button">Download PNG</button></a>
+      <button class="secondary" type="button" id="copyPayload">Copy content</button>
+      <button class="danger" type="button" id="cancelQr">Cancel</button></div></div></div>`;
+    $('copyPayload').onclick = () => navigator.clipboard?.writeText(qr.qrPayload).then(() => toast('QR content copied'));
+    $('cancelQr').onclick = async () => { try { const s = await api('POST', `/qr-payments/${qr.token}/cancel`); renderQrStatus(s); loadQrList(); } catch (err) { toast(err.message); } };
+  }
+  function renderQrStatus(s) { const el = $('qrStatus'); if (el) el.innerHTML = statusPill(s.status) + (s.paidByWalletId ? ` by ${esc(nameOf(s.paidByWalletId))}` : ''); }
+  async function loadQrList() {
+    if (!state.activeId) return;
+    const list = await api('GET', `/wallets/${state.activeId}/qr-payments`).catch(() => []);
+    $('qrList').innerHTML = list.length ? list.slice(0, 8).map((q) => `<tr><td>${when(q.createdAt)}</td><td>${esc(q.description || 'No description')}${q.paidByWalletId ? `<div class="small">paid by ${esc(nameOf(q.paidByWalletId))}</div>` : ''}</td><td>${statusPill(q.status)}</td><td class="num">${money(q.amount, q.currency)}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">No QR requests yet</td></tr>';
+  }
+
+  // ---------- scan & pay ----------
+  $('qrFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const img = new Image();
+    img.onload = () => {
+      const c = $('scanCanvas'); c.width = img.width; c.height = img.height;
+      const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+      const code = jsQR(ctx.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+      URL.revokeObjectURL(img.src);
+      if (!code) return toast('No QR code found in the image');
+      $('qrPayloadInput').value = code.data; lookupQr(code.data);
+    };
+    img.src = URL.createObjectURL(file);
+    e.target.value = '';
+  });
+  $('lookupBtn').addEventListener('click', () => lookupQr($('qrPayloadInput').value.trim()));
+  $('cameraBtn').addEventListener('click', async () => {
+    if (state.cameraStream) return stopCamera();
+    try {
+      state.cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      const v = $('camera'); v.srcObject = state.cameraStream; v.style.display = 'block'; await v.play(); $('cameraBtn').textContent = 'Stop camera';
+      const c = $('scanCanvas'); const ctx = c.getContext('2d', { willReadFrequently: true });
+      const tick = () => {
+        if (!state.cameraStream) return;
+        if (v.readyState === v.HAVE_ENOUGH_DATA) {
+          c.width = v.videoWidth; c.height = v.videoHeight; ctx.drawImage(v, 0, 0);
+          const code = jsQR(ctx.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+          if (code) { stopCamera(); $('qrPayloadInput').value = code.data; lookupQr(code.data); return; }
+        }
+        requestAnimationFrame(tick);
+      };
+      tick();
+    } catch { toast('Camera not available. Upload an image instead.'); }
+  });
+  function stopCamera() {
+    if (state.cameraStream) state.cameraStream.getTracks().forEach((t) => t.stop());
+    state.cameraStream = null; $('camera').style.display = 'none'; $('cameraBtn').textContent = 'Use camera';
+  }
+  async function lookupQr(payload) {
+    if (!payload) return;
+    clearResult('payResult');
+    try {
+      const qr = await api('GET', `/qr-payments/${encodeURIComponent(payload)}`);
+      state.scanned = qr;
+      const payable = qr.status === 'PENDING';
+      $('payPreview').innerHTML = `<div class="preview"><div class="small">Pay to ${esc(nameOf(qr.payeeWalletId))} · <span class="mono">${qr.payeeWalletId}</span></div>
+        <div class="amt">${money(qr.amount, qr.currency)}</div><div>${esc(qr.description || '')}</div>
+        <p class="small">${statusPill(qr.status)} · expires ${when(qr.expiresAt)}</p>
+        ${payable ? `<div class="actions"><button id="confirmPay">Pay ${money(qr.amount, qr.currency)}</button></div>` : ''}</div>`;
+      if (payable) $('confirmPay').onclick = (ev) => payScanned(ev.target);
+    } catch (err) { $('payPreview').innerHTML = ''; result('payResult', false, esc(err.message)); }
+  }
+  function payScanned(btn) {
+    if (!requireWallet() || !state.scanned) return;
+    busy(btn, async () => {
+      try {
+        const out = await api('POST', `/qr-payments/${state.scanned.token}/pay`, { payerWalletId: state.activeId });
+        result('payResult', true, `${statusPill(out.qrPayment.status)} Paid <b>${money(out.transfer.amount, out.transfer.currency)}</b> to ${esc(nameOf(out.qrPayment.payeeWalletId))}.<br><span class="small">Transfer <span class="mono">${out.transfer.id}</span> · Your balance ${money(out.payerWallet.balance, out.transfer.currency)}</span>`);
+        $('payPreview').innerHTML = '';
+      } catch (err) { result('payResult', false, `<b>${esc(err.data?.code || 'ERROR')}</b>: ${esc(err.message)}`); }
+      await refresh();
+    });
+  }
+
+  // ---------- history ----------
+  async function loadHistory() {
+    if (!state.activeId) return;
+    const type = $('historyFilter').value;
+    const res = await api('GET', `/wallets/${state.activeId}/transactions?page=${state.page}&pageSize=10${type ? `&type=${type}` : ''}`);
+    state.totalPages = res.pageInfo.totalPages;
+    $('historyBody').innerHTML = res.data.length ? res.data.map((t) => {
+      const detail = t.counterpartyWalletId ? `${t.direction === 'DEBIT' ? 'To' : 'From'} ${esc(nameOf(t.counterpartyWalletId))}` : esc(t.paymentMethod === 'CARD' ? 'Card' : t.paymentMethod === 'BANK_ACCOUNT' ? 'Bank account' : '');
+      return `<tr><td>${when(t.timestamp)}</td><td>${TYPE_LABEL[t.type] || esc(t.type)}</td><td>${detail}<div class="small">${esc(t.description || '')}</div></td>
+        <td class="num ${t.direction === 'CREDIT' ? 'credit' : 'debit'}">${t.direction === 'CREDIT' ? '+' : '−'}${money(t.amount, t.currency)}</td><td class="num">${money(t.balanceAfter, t.currency)}</td></tr>`;
+    }).join('') : '<tr><td colspan="5" class="empty">No transactions yet</td></tr>';
+    $('historyInfo').textContent = `Page ${res.pageInfo.page} of ${res.pageInfo.totalPages} · ${res.pageInfo.totalItems} transactions`;
+    $('prevPage').disabled = state.page <= 1; $('nextPage').disabled = state.page >= state.totalPages;
+  }
+  $('historyFilter').addEventListener('change', () => { state.page = 1; loadHistory(); });
+  $('prevPage').addEventListener('click', () => { state.page -= 1; loadHistory(); });
+  $('nextPage').addEventListener('click', () => { state.page += 1; loadHistory(); });
+
+  // ---------- gateway log ----------
+  async function loadGateway() {
+    if (!state.activeId) return;
+    const rows = await api('GET', `/wallets/${state.activeId}/gateway-transactions`);
+    $('gatewayBody').innerHTML = rows.length ? rows.map((g) => `<tr><td>${when(g.createdAt)}</td><td>${g.operation === 'TOP_UP' ? 'Top-up' : 'Withdrawal'}</td>
+      <td>${g.method === 'CARD' ? `${esc(g.cardBrand)} ****${esc(g.cardLast4)}` : 'Bank transfer'}</td>
+      <td>${statusPill(g.status)}${g.failureCode ? `<div class="small">${esc(g.failureCode)}</div>` : ''}</td>
+      <td class="mono">${esc(g.gatewayReference || 'None')}</td><td class="num">${money(g.amount, g.currency)}</td></tr>`).join('') : '<tr><td colspan="6" class="empty">No gateway transactions yet</td></tr>';
+  }
+
+  // ---------- boot ----------
+  renderWalletChrome();
+  const start = savedActive();
+  const first = state.wallets.find((w) => w.walletId === start) || state.wallets[0];
+  if (first) selectWallet(first.walletId);
+})();
+</script>
+</body>
+</html>

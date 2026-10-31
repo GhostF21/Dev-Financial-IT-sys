@@ -1,0 +1,149 @@
+# Build pipeline (CI)
+#   Pull request -> install, check and build every service image (nothing is pushed)
+#   Push to main -> same, then push the images to Azure Container Registry tagged with the commit SHA.
+#   A successful run on main automatically triggers the Release workflow.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform.yml"
+      - "**/*.md"
+      - "docs/**"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - customer-service
+          - identity-service
+          - account-service
+          - payment-service
+          - ledger-service
+          - notification-service
+          - wallet-service
+    defaults:
+      run:
+        working-directory: ${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ${{ matrix.service }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Syntax check
+        run: find src -name '*.js' -print0 | xargs -0 -n1 node --check
+
+      - name: Unit tests
+        run: npm test --if-present
+
+      - name: Dependency audit (production deps, high+)
+        run: npm audit --omit=dev --audit-level=high
+
+  validate-manifests:
+    name: Validate Kubernetes manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render kustomize
+        run: kubectl kustomize infra/k8s > /dev/null
+
+  image:
+    name: Image ${{ matrix.service }}
+    needs: [test, validate-manifests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { service: customer-service, context: customer-service, dockerfile: customer-service/Dockerfile }
+          - { service: identity-service, context: identity-service, dockerfile: identity-service/Dockerfile }
+          - { service: account-service, context: account-service, dockerfile: account-service/Dockerfile }
+          - { service: payment-service, context: payment-service, dockerfile: payment-service/Dockerfile }
+          - { service: ledger-service, context: ledger-service, dockerfile: ledger-service/Dockerfile }
+          - { service: notification-service, context: notification-service, dockerfile: notification-service/Dockerfile }
+          - { service: wallet-service, context: wallet-service, dockerfile: wallet-service/Dockerfile }
+          - { service: api-gateway, context: ., dockerfile: api-gateway/Dockerfile }
+    env:
+      PUSH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Azure login (OIDC)
+        if: env.PUSH == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        if: env.PUSH == 'true'
+        run: az acr login --name "${{ vars.ACR_NAME }}"
+
+      - name: Image name
+        id: meta
+        run: |
+          if [ "$PUSH" = "true" ]; then
+            echo "image=${{ vars.ACR_NAME }}.azurecr.io/finnova/${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=finnova/${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: ${{ env.PUSH == 'true' }}
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ github.sha }}
+            ${{ steps.meta.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  summary:
+    name: Build summary
+    needs: image
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          {
+            echo "## Build ${{ github.sha }}"
+            if [ "${{ github.event_name }}" != "pull_request" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+              echo "Images pushed to \`${{ vars.ACR_NAME }}.azurecr.io/finnova/*:${{ github.sha }}\` - Release will deploy them."
+            else
+              echo "Images built only (not pushed)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

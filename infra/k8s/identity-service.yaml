@@ -1,0 +1,71 @@
+# identity-service - production (AKS)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: identity-service
+  labels: { app: identity-service }
+spec:
+  replicas: 1   # cost-saving default; raise to 2+ for high availability
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: { app: identity-service }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: identity-service, tier: backend }
+    spec:
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: identity-service }
+      containers:
+        - name: identity-service
+          image: finnova/identity-service   # tag/registry set by the release pipeline (kustomize edit set image)
+          ports:
+            - containerPort: 3003
+          env:
+            - name: PORT
+              value: "3003"
+          envFrom:
+            - configMapRef: { name: finnova-config }
+            - secretRef: { name: finnova-db }   # created by the release pipeline from Key Vault
+          readinessProbe:
+            httpGet: { path: /readyz, port: 3003 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 3003 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests: { cpu: "50m", memory: "96Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: identity-service
+  labels: { app: identity-service }
+spec:
+  type: ClusterIP
+  selector: { app: identity-service }
+  ports:
+    - port: 3003
+      targetPort: 3003
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: identity-service
+spec:
+  maxUnavailable: 1   # never blocks node drains/upgrades, also with 1 replica
+  selector:
+    matchLabels: { app: identity-service }

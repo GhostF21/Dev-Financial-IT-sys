@@ -1,0 +1,8 @@
+# Copy to backend.hcl (git-ignored) to run Terraform locally:
+#   terraform init -backend-config=backend.hcl
+#   terraform plan -var-file=prod.tfvars
+resource_group_name  = "rg-finnova-tfstate"
+storage_account_name = "stfinnovatfstateXXXX"
+container_name       = "tfstate"
+key                  = "finnova-prod.tfstate"
+use_azuread_auth     = true
