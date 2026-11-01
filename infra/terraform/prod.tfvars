@@ -2,8 +2,8 @@
 # Non-secret values only: this file is committed.
 
 # Must be a region your subscription is allowed to use (see infra/README.md, step 2).
-location      = "italynorth"
-unique_suffix = "m26y"
+location      = "germanywestcentral" # italynorth: AKS only allows v5+ sizes there, and this subscription has no quota for them
+unique_suffix = "m26g"
 
 # Your Entra ID user object id (az ad signed-in-user show --query id -o tsv),
 # so you can use kubectl and read Key Vault secrets yourself.
