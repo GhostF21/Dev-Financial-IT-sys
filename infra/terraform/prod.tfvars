@@ -3,7 +3,7 @@
 
 # Must be a region your subscription is allowed to use (see infra/README.md, step 2).
 location      = "italynorth"
-unique_suffix = "M26Y"
+unique_suffix = "m26y"
 
 # Your Entra ID user object id (az ad signed-in-user show --query id -o tsv),
 # so you can use kubectl and read Key Vault secrets yourself.
