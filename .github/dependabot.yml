@@ -12,11 +12,19 @@ updates:
       - /payment-service
       - /wallet-service
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 10
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # Express 5 is a breaking upgrade (routing / error handling changes) - do it deliberately, not via a bot.
+      - dependency-name: express
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    groups:
+      github-actions:
+        patterns: ["*"]
