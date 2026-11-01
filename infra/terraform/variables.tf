@@ -27,7 +27,7 @@ variable "unique_suffix" {
 }
 
 variable "admin_object_ids" {
-  description = "Entra ID object IDs (users or groups) that get cluster-admin on AKS and secret access in Key Vault, e.g. your own user."
+  description = "Entra ID object IDs (users or groups) that get secret access in Key Vault, e.g. your own user."
   type        = list(string)
   default     = []
 }
@@ -38,9 +38,9 @@ variable "vnet_address_space" {
   default = "10.10.0.0/16"
 }
 
-variable "aks_subnet_prefix" {
+variable "apps_subnet_prefix" {
   type    = string
-  default = "10.10.0.0/22"
+  default = "10.10.0.0/23"
 }
 
 variable "postgres_subnet_prefix" {
@@ -48,43 +48,9 @@ variable "postgres_subnet_prefix" {
   default = "10.10.8.0/24"
 }
 
-# ---------- AKS ----------
-variable "kubernetes_version" {
-  description = "AKS Kubernetes version. null = latest default version in the region."
-  type        = string
-  default     = null
-}
-
-variable "aks_sku_tier" {
-  description = "Free (no SLA) or Standard (financially backed uptime SLA, recommended for real production)."
-  type        = string
-  default     = "Free"
-}
-
-variable "aks_node_vm_size" {
-  description = "Node VM size. Standard_B2als_v2 (2 vCPU / 4 GiB) is cheap and usually allowed on Azure for Students."
-  type        = string
-  default     = "Standard_B2als_v2"
-}
-
-variable "aks_node_min_count" {
-  type    = number
-  default = 1
-}
-
-variable "aks_node_max_count" {
-  type    = number
-  default = 2
-}
-
-variable "aks_os_disk_size_gb" {
-  description = "Node OS disk size. The AKS default (128 GB) costs noticeably more than a small disk."
-  type        = number
-  default     = 30
-}
-
+# ---------- Container Apps ----------
 variable "enable_monitoring" {
-  description = "Container Insights + Log Analytics. Billed per GB of logs ingested - off by default to save money."
+  description = "Send container app logs to Log Analytics. Billed per GB of logs ingested - off by default to save money."
   type        = bool
   default     = false
 }

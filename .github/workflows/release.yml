@@ -1,7 +1,7 @@
 # Release pipeline (CD)
 # Runs automatically after a successful "Build" on main and deploys exactly those images
-# (tag = commit SHA) to AKS. Can also be started manually to redeploy / roll back to any
-# earlier commit SHA whose images are still in ACR.
+# (tag = commit SHA) to Azure Container Apps. Can also be started manually to redeploy /
+# roll back to any earlier commit SHA whose images are still in ACR.
 name: Release
 
 on:
@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy to AKS (production)
+    name: Deploy to Container Apps (production)
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -34,18 +34,29 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: production # approvals / wait timers configured in Settings -> Environments
-      url: ${{ steps.endpoint.outputs.url }}
+      url: ${{ steps.deploy.outputs.url }}
     env:
       IMAGE_TAG: ${{ inputs.image_tag || github.event.workflow_run.head_sha || github.sha }}
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-      AKS_CLUSTER: ${{ vars.AKS_CLUSTER_NAME }}
       ACR_NAME: ${{ vars.ACR_NAME }}
-      KEY_VAULT: ${{ vars.KEY_VAULT_NAME }}
-      NAMESPACE: finnova
+      KEY_VAULT_NAME: ${{ vars.KEY_VAULT_NAME }}
+      CONTAINER_APPS_ENVIRONMENT: ${{ vars.CONTAINER_APPS_ENVIRONMENT }}
+      CONTAINER_APPS_IDENTITY: ${{ vars.CONTAINER_APPS_IDENTITY }}
       SERVICES: >-
         customer-service identity-service account-service payment-service
         ledger-service notification-service wallet-service api-gateway
     steps:
+      - name: Check repository variables
+        run: |
+          missing=""
+          for v in RESOURCE_GROUP ACR_NAME KEY_VAULT_NAME CONTAINER_APPS_ENVIRONMENT CONTAINER_APPS_IDENTITY; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository variables:$missing (RESOURCE_GROUP = AZURE_RESOURCE_GROUP). Copy them from the github_variables output of the Terraform Apply run (see infra/README.md step 7)."
+            exit 1
+          fi
+
       - name: Checkout the commit being released
         uses: actions/checkout@v4
         with:
@@ -65,84 +76,22 @@ jobs:
               || { echo "::error::Missing image finnova/$svc:$IMAGE_TAG in $ACR_NAME"; exit 1; }
           done
 
-      - name: Install kubectl + kubelogin
+      # Used for the automatic rollback below; empty on the very first release.
+      - name: Remember the running version
+        id: previous
         run: |
-          mkdir -p "$HOME/.local/bin"
-          az aks install-cli \
-            --install-location "$HOME/.local/bin/kubectl" \
-            --kubelogin-install-location "$HOME/.local/bin/kubelogin"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          image=$(az resource show -g "$RESOURCE_GROUP" -n api-gateway --resource-type Microsoft.App/containerApps \
+            --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          echo "Currently running: ${image:-<nothing>}"
+          echo "tag=${image##*:}" >> "$GITHUB_OUTPUT"
 
-      - name: Get AKS credentials (Entra ID)
-        run: |
-          az aks get-credentials -g "$RESOURCE_GROUP" -n "$AKS_CLUSTER" --overwrite-existing
-          kubelogin convert-kubeconfig -l azurecli
-          kubectl version
-          kubectl get nodes
-
-      - name: Ensure namespace
-        run: kubectl apply -f infra/k8s/namespace.yaml
-
-      - name: Sync database secret from Key Vault
-        run: |
-          umask 077
-          envfile="$RUNNER_TEMP/db.env"
-          get() { az keyvault secret show --vault-name "$KEY_VAULT" --name "$1" --query value -o tsv; }
-          DB_HOST=$(get db-host); DB_NAME=$(get db-name); DB_USER=$(get db-user); DB_PASSWORD=$(get db-password)
-          echo "::add-mask::$DB_PASSWORD"
-          printf 'DB_HOST=%s\nDB_NAME=%s\nDB_USER=%s\nDB_PASSWORD=%s\n' \
-            "$DB_HOST" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" > "$envfile"
-          kubectl -n "$NAMESPACE" create secret generic finnova-db \
-            --from-env-file="$envfile" --dry-run=client -o yaml | kubectl apply -f -
-          rm -f "$envfile"
-
-      - name: Set image tags
-        working-directory: infra/k8s
-        run: |
-          if ! command -v kustomize >/dev/null; then
-            (cd "$HOME/.local/bin" && curl -fsSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash)
-          fi
-          for svc in $SERVICES; do
-            kustomize edit set image "finnova/$svc=$ACR_NAME.azurecr.io/finnova/$svc:$IMAGE_TAG"
-          done
-          echo "Rendered images:"; kubectl kustomize . | grep 'image:'
-
-      - name: Apply manifests
-        run: kubectl apply -k infra/k8s
-
-      - name: Public DNS label for the gateway
-        if: vars.DNS_LABEL != ''
-        run: |
-          kubectl -n "$NAMESPACE" annotate service api-gateway \
-            "service.beta.kubernetes.io/azure-dns-label-name=${{ vars.DNS_LABEL }}" --overwrite
-
-      - name: Wait for rollout
-        run: |
-          for svc in $SERVICES; do
-            kubectl -n "$NAMESPACE" rollout status "deployment/$svc" --timeout=300s
-          done
-
-      - name: Resolve public endpoint
-        id: endpoint
-        run: |
-          for i in $(seq 1 30); do
-            ip=$(kubectl -n "$NAMESPACE" get svc api-gateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-            [ -n "$ip" ] && break
-            sleep 10
-          done
-          [ -n "$ip" ] || { echo "::error::Load balancer IP not assigned"; exit 1; }
-          if [ -n "${{ vars.DNS_LABEL }}" ]; then
-            location=$(az aks show -g "$RESOURCE_GROUP" -n "$AKS_CLUSTER" --query location -o tsv)
-            host="${{ vars.DNS_LABEL }}.$location.cloudapp.azure.com"
-          else
-            host="$ip"
-          fi
-          echo "url=http://$host" >> "$GITHUB_OUTPUT"
-          echo "ip=$ip" >> "$GITHUB_OUTPUT"
+      - name: Deploy container apps
+        id: deploy
+        run: bash infra/containerapps/deploy.sh
 
       - name: Smoke test
         run: |
-          base="http://${{ steps.endpoint.outputs.ip }}"
+          base="${{ steps.deploy.outputs.url }}"
           for i in $(seq 1 12); do
             curl -fsS "$base/healthz" && break
             sleep 5
@@ -150,17 +99,28 @@ jobs:
           curl -fsS "$base/healthz"
           curl -fsS -o /dev/null "$base/docs/"
           curl -fsS -o /dev/null "$base/wallet/"
-          echo "### Released \`$IMAGE_TAG\` to ${{ steps.endpoint.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
+          # Gateway -> backend routing: any answer from the service is fine (e.g. 401/404), a 5xx is not.
+          for path in /customers /auth /accounts /payments /wallets; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$base$path")
+            echo "$path -> $code"
+            [ "$code" -lt 500 ] || { echo "::error::$path returned $code - gateway cannot reach the backend"; exit 1; }
+          done
+          echo "### Released \`$IMAGE_TAG\` to $base" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Diagnostics and rollback on failure
-        if: failure()
+        if: failure() && steps.deploy.conclusion != 'skipped'
+        env:
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
         run: |
-          kubectl -n "$NAMESPACE" get pods -o wide || true
-          kubectl -n "$NAMESPACE" get events --sort-by=.lastTimestamp | tail -n 40 || true
           for svc in $SERVICES; do
-            if ! kubectl -n "$NAMESPACE" rollout status "deployment/$svc" --timeout=5s >/dev/null 2>&1; then
-              echo "Rolling back $svc"
-              kubectl -n "$NAMESPACE" logs "deployment/$svc" --tail=50 || true
-              kubectl -n "$NAMESPACE" rollout undo "deployment/$svc" || true
-            fi
+            az resource show -g "$RESOURCE_GROUP" -n "$svc" --resource-type Microsoft.App/containerApps \
+              --query "{app:name, state:properties.provisioningState, running:properties.runningStatus, latest:properties.latestRevisionName, ready:properties.latestReadyRevisionName}" \
+              -o json 2>/dev/null || echo "$svc: not found"
           done
+          if [ -n "$PREVIOUS_TAG" ] && [ "$PREVIOUS_TAG" != "$IMAGE_TAG" ]; then
+            echo "Rolling back to $PREVIOUS_TAG"
+            IMAGE_TAG="$PREVIOUS_TAG" bash infra/containerapps/deploy.sh
+            echo "### Release of \`$IMAGE_TAG\` failed - rolled back to \`$PREVIOUS_TAG\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No earlier version to roll back to."
+          fi

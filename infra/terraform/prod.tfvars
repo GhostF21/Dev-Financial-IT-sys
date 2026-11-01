@@ -2,19 +2,13 @@
 # Non-secret values only: this file is committed.
 
 # Must be a region your subscription is allowed to use (see infra/README.md, step 2).
-location      = "germanywestcentral" # italynorth: AKS only allows v5+ sizes there, and this subscription has no quota for them
-unique_suffix = "m26g"
+# italynorth: PostgreSQL Flexible Server is offered there (not in germanywestcentral).
+location      = "italynorth"
+unique_suffix = "m26c"
 
 # Your Entra ID user object id (az ad signed-in-user show --query id -o tsv),
-# so you can use kubectl and read Key Vault secrets yourself.
+# so you can read Key Vault secrets yourself.
 admin_object_ids = ["4a42be87-b194-4b07-9b4b-917e3b140d09"]
-
-# ---- Kubernetes: one small node, autoscaler may add a 2nd under load ----
-aks_sku_tier        = "Free"
-aks_node_vm_size    = "Standard_B2als_v2"
-aks_node_min_count  = 1
-aks_node_max_count  = 2
-aks_os_disk_size_gb = 30
 
 # ---- Cheap extras ----
 acr_sku                    = "Basic"

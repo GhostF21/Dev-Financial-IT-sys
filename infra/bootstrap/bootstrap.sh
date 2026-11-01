@@ -23,9 +23,9 @@ TENANT_ID=$(az account show --query tenantId -o tsv)
 echo "Subscription: $SUBSCRIPTION_ID  Tenant: $TENANT_ID  Repo: $GITHUB_REPO"
 
 echo "==> Registering resource providers"
-for rp in Microsoft.ContainerService Microsoft.ContainerRegistry Microsoft.DBforPostgreSQL \
+for rp in Microsoft.App Microsoft.ContainerRegistry Microsoft.DBforPostgreSQL \
           Microsoft.KeyVault Microsoft.Network Microsoft.OperationalInsights \
-          Microsoft.OperationsManagement Microsoft.Insights Microsoft.Storage \
+          Microsoft.Insights Microsoft.Storage \
           Microsoft.ManagedIdentity; do
   az provider register --namespace "$rp" -o none
 done
@@ -98,7 +98,7 @@ assign() { # role scope
     --role "$1" --scope "$2" -o none 2>/dev/null || true
 }
 assign "Contributor"                               "/subscriptions/$SUBSCRIPTION_ID"
-assign "Role Based Access Control Administrator"   "/subscriptions/$SUBSCRIPTION_ID" # Terraform creates AcrPull / Key Vault / AKS role assignments
+assign "Role Based Access Control Administrator"   "/subscriptions/$SUBSCRIPTION_ID" # Terraform creates AcrPull / Key Vault role assignments
 assign "Storage Blob Data Contributor"             "$SA_ID"                           # Terraform state (Entra auth, no keys)
 
 # Let the signed-in user run Terraform locally against the same state

@@ -19,7 +19,7 @@ resource "azurerm_postgresql_flexible_server" "main" {
   administrator_login    = var.postgres_admin_login
   administrator_password = random_password.postgres_admin.result
 
-  # Private access only: reachable from the VNet (AKS), not from the internet.
+  # Private access only: reachable from the VNet (Container Apps), not from the internet.
   delegated_subnet_id           = azurerm_subnet.postgres.id
   private_dns_zone_id           = azurerm_private_dns_zone.postgres.id
   public_network_access_enabled = false

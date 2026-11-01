@@ -62,17 +62,17 @@ jobs:
       - name: Dependency audit (production deps, high+)
         run: npm audit --omit=dev --audit-level=high
 
-  validate-manifests:
-    name: Validate Kubernetes manifests
+  validate-deploy-script:
+    name: Validate Container Apps deploy script
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Render kustomize
-        run: kubectl kustomize infra/k8s > /dev/null
+      - name: ShellCheck
+        run: shellcheck infra/containerapps/deploy.sh
 
   image:
     name: Image ${{ matrix.service }}
-    needs: [test, validate-manifests]
+    needs: [test, validate-deploy-script]
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -23,7 +23,7 @@ resource "time_sleep" "kv_rbac_propagation" {
   depends_on      = [azurerm_role_assignment.kv_secrets_officer]
 }
 
-# Connection settings consumed by the release pipeline (-> Kubernetes secret).
+# Connection settings; the container apps read them through Key Vault references.
 locals {
   db_secrets = {
     "db-host"     = azurerm_postgresql_flexible_server.main.fqdn
