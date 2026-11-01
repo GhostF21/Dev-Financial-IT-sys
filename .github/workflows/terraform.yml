@@ -60,14 +60,20 @@ jobs:
       - name: Format check
         run: terraform fmt -check -recursive
 
-      - name: Init
-        run: terraform init $BACKEND_CONFIG
-
       - name: Validate
-        run: terraform validate
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      # Dependabot PRs (and forks) get no repository secrets, so they cannot log in to
+      # Azure: they stop after fmt + validate instead of failing.
+      - name: Init
+        if: env.ARM_CLIENT_ID != ''
+        run: terraform init $BACKEND_CONFIG
 
       - name: Plan
         id: plan
+        if: env.ARM_CLIENT_ID != ''
         run: |
           set +e
           terraform plan -var-file=prod.tfvars -out=tfplan -detailed-exitcode -no-color

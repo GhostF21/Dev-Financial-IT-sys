@@ -61,9 +61,33 @@ add_fic() { # name subject
       --audiences "api://AzureADTokenExchange" -o none
   fi
 }
-add_fic gh-main           "repo:${GITHUB_REPO}:ref:refs/heads/main"     # build push, terraform plan on main
-add_fic gh-env-production "repo:${GITHUB_REPO}:environment:production"  # terraform apply, release
-add_fic gh-pull-request   "repo:${GITHUB_REPO}:pull_request"            # terraform plan on PRs
+add_fics() { # name-prefix subject-prefix
+  add_fic "$1-main"           "$2:ref:refs/heads/main"     # build push, terraform plan on main
+  add_fic "$1-env-production" "$2:environment:production"  # terraform apply, release
+  add_fic "$1-pull-request"   "$2:pull_request"            # terraform plan on PRs
+}
+add_fics gh "repo:${GITHUB_REPO}"
+
+# Newer repositories get an immutable subject that includes the numeric owner / repo ids:
+#   repo:Owner@123/Repo@456:ref:refs/heads/main
+# Register that form too. Ids are looked up via the GitHub API, or pass them in
+# (GITHUB_OWNER_ID / GITHUB_REPO_ID) - the "subject claim" line of a failed azure/login run shows them.
+GITHUB_OWNER_ID="${GITHUB_OWNER_ID:-}"
+GITHUB_REPO_ID="${GITHUB_REPO_ID:-}"
+if [ -z "$GITHUB_OWNER_ID" ] || [ -z "$GITHUB_REPO_ID" ]; then
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    repo_json=$(gh api "repos/$GITHUB_REPO" 2>/dev/null || true)
+  else
+    repo_json=$(curl -fsSL "https://api.github.com/repos/$GITHUB_REPO" 2>/dev/null || true)
+  fi
+  GITHUB_OWNER_ID="${GITHUB_OWNER_ID:-$(printf '%s' "$repo_json" | tr -d '\n' | sed -n 's/.*"owner": *{[^}]*"id": *\([0-9]*\).*/\1/p')}"
+  GITHUB_REPO_ID="${GITHUB_REPO_ID:-$(printf '%s' "$repo_json" | tr -d '\n' | sed -n 's/^{ *"id": *\([0-9]*\).*/\1/p')}"
+fi
+if [ -n "$GITHUB_OWNER_ID" ] && [ -n "$GITHUB_REPO_ID" ]; then
+  add_fics gh-id "repo:${GITHUB_REPO%%/*}@${GITHUB_OWNER_ID}/${GITHUB_REPO#*/}@${GITHUB_REPO_ID}"
+else
+  echo "    WARNING: could not look up the GitHub owner/repo ids - set GITHUB_OWNER_ID and GITHUB_REPO_ID and re-run"
+fi
 
 echo "    waiting 30s for the identity to replicate..."
 sleep 30
