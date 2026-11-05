@@ -97,10 +97,12 @@ jobs:
             sleep 5
           done
           curl -fsS "$base/healthz"
-          curl -fsS -o /dev/null "$base/docs/"
-          curl -fsS -o /dev/null "$base/wallet/"
+          # Without the trailing slash nginx redirects; -L follows it like a browser does.
+          curl -fsSL --max-time 15 -o /dev/null "$base/"
+          curl -fsSL --max-time 15 -o /dev/null "$base/docs"
+          curl -fsSL --max-time 15 -o /dev/null "$base/wallet"
           # Gateway -> backend routing: any answer from the service is fine (e.g. 401/404), a 5xx is not.
-          for path in /customers /auth /accounts /payments /wallets; do
+          for path in /customers /auth /accounts /payments /wallets /fx/rates /ledger-entries /notifications; do
             code=$(curl -s -o /dev/null -w '%{http_code}' "$base$path")
             echo "$path -> $code"
             [ "$code" -lt 500 ] || { echo "::error::$path returned $code - gateway cannot reach the backend"; exit 1; }

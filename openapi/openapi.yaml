@@ -36,6 +36,14 @@ tags:
     description: QR code payment requests and payments
   - name: Wallet History
     description: Wallet payment history and payment gateway processing log
+  - name: FX
+    description: >
+      Fixed demo exchange rates (not market data). Payments, wallet transfers, QR payments,
+      top-ups and withdrawals between different currencies are converted automatically.
+  - name: Ledger
+    description: Double-entry ledger (read only)
+  - name: Notifications
+    description: In-app notification inbox
 
 paths:
   /customers:
@@ -142,6 +150,67 @@ paths:
         '409':
           description: Username already exists
 
+  /auth/me:
+    get:
+      tags: [Identity]
+      summary: The signed-in user
+      operationId: getCurrentUser
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current user and session expiry
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+                  expiresAt:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/logout:
+    post:
+      tags: [Identity]
+      summary: End the current session
+      operationId: logout
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Session ended
+
+  /auth/users/{username}:
+    get:
+      tags: [Identity]
+      summary: Find a user by username (to send money to "@username")
+      operationId: findUserByUsername
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  username:
+                    type: string
+                  customerId:
+                    type: string
+                    format: uuid
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /auth/login:
     post:
       tags: [Identity]
@@ -164,6 +233,34 @@ paths:
           $ref: '#/components/responses/Unauthorized'
 
   /accounts:
+    get:
+      tags: [Accounts]
+      summary: List a customer's accounts, or find an account by its account number
+      operationId: listAccounts
+      parameters:
+        - name: customerId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: accountNumber
+          in: query
+          description: Returns a one-element list with the matching account
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
     post:
       tags: [Accounts]
       summary: Open a new bank account
@@ -801,7 +898,98 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /fx/rates:
+    get:
+      tags: [FX]
+      summary: Fixed exchange rates (units of each currency per 1 EUR)
+      operationId: getFxRates
+      responses:
+        '200':
+          description: Rates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  base:
+                    type: string
+                    example: EUR
+                  rates:
+                    type: object
+                    additionalProperties:
+                      type: number
+                    example: { EUR: 1, USD: 1.08, GBP: 0.85, CHF: 0.95, PLN: 4.3, HUF: 395 }
+
+  /fx/quote:
+    get:
+      tags: [FX]
+      summary: Convert an amount between two currencies
+      operationId: getFxQuote
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, example: EUR } }
+        - { name: to, in: query, required: true, schema: { type: string, example: HUF } }
+        - { name: amount, in: query, required: true, schema: { type: number, example: 10 } }
+      responses:
+        '200':
+          description: Quote
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  from: { type: string }
+                  to: { type: string }
+                  amount: { type: number }
+                  rate: { type: number }
+                  convertedAmount: { type: number, example: 3950 }
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /ledger-entries:
+    get:
+      tags: [Ledger]
+      summary: Ledger entries of an account or wallet (wallet entries use the wallet ID)
+      operationId: listLedgerEntries
+      parameters:
+        - { name: accountId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        '200':
+          description: Newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LedgerEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: A customer's notifications (newest first, max. 100)
+      operationId: listNotifications
+      parameters:
+        - { name: recipientId, in: query, required: true, description: Customer ID, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notification'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: accessToken from POST /auth/login
   parameters:
     WalletId:
       name: walletId
@@ -969,6 +1157,37 @@ components:
           type: string
           format: date-time
 
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        customerId: { type: string, format: uuid }
+        username: { type: string }
+        status: { type: string, example: ACTIVE }
+        createdAt: { type: string, format: date-time }
+
+    LedgerEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        transactionId: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        entryType: { type: string, enum: [DEBIT, CREDIT] }
+        amount: { type: number }
+        currency: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    Notification:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        recipientId: { type: string, format: uuid }
+        channel: { type: string, example: IN_APP }
+        type: { type: string, example: PAYMENT_RECEIVED }
+        payload: { type: object, additionalProperties: true }
+        status: { type: string, example: DELIVERED }
+        createdAt: { type: string, format: date-time }
+
     UserRegistrationRequest:
       type: object
       required: [customerId, username, password]
@@ -1046,6 +1265,14 @@ components:
               format: uuid
             status:
               $ref: '#/components/schemas/PaymentStatus'
+            toAmount:
+              type: number
+              description: Amount credited to the destination account (converted if its currency differs)
+            toCurrency:
+              type: string
+            fxRate:
+              type: number
+              description: 1 unit of currency = fxRate units of toCurrency
             createdAt:
               type: string
               format: date-time
@@ -1299,6 +1526,13 @@ components:
           format: double
         currency:
           type: string
+        toAmount:
+          type: number
+          description: Amount credited to the destination wallet (converted if its currency differs)
+        toCurrency:
+          type: string
+        fxRate:
+          type: number
         type:
           type: string
           enum: [P2P, QR_PAYMENT]
