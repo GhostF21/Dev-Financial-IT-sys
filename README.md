@@ -35,6 +35,14 @@ Notification Service (read only). It serves the FinNova web app at `/`, the wall
 developer console at `/wallet/`, and Swagger UI at `/docs/`. The `/internal/...`
 endpoints are not publicly exposed.
 
+## Automated tests
+
+43 end-to-end test cases for Digital Wallet, P2P Transfer, QR Payment and Payment
+History live in [`tests/`](tests/README.md). The Build pipeline runs them against the
+full docker-compose stack on every pull request and every merge to `main`; nothing is
+deployed unless they pass. Locally: `node --test tests/e2e/*.test.mjs` while the stack
+is running.
+
 ## Domain flow
 
 Customer Service creates a customer and records KYC. Identity Service can then

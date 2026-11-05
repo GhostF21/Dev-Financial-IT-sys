@@ -1,5 +1,5 @@
 # Build pipeline (CI)
-#   Pull request -> install, check and build every service image (nothing is pushed)
+#   Pull request -> install, check, run the end-to-end tests and build every service image (nothing is pushed)
 #   Push to main -> same, then push the images to Azure Container Registry tagged with the commit SHA.
 #   A successful run on main automatically triggers the Release workflow.
 name: Build
@@ -70,9 +70,53 @@ jobs:
       - name: ShellCheck
         run: shellcheck infra/containerapps/deploy.sh
 
+  # End-to-end tests of the wallet features (Digital Wallet, P2P Transfer, QR Payment,
+  # Payment History) against the whole stack started with docker compose. Images are
+  # pushed (and Release deploys) only when these pass.
+  e2e:
+    name: E2E tests (wallet features)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Start the stack
+        run: docker compose up -d --build --wait --wait-timeout 300
+
+      - name: Run end-to-end tests
+        run: >-
+          node --test
+          --test-reporter=spec --test-reporter-destination=stdout
+          --test-reporter=spec --test-reporter-destination=e2e-report.txt
+          tests/e2e/*.test.mjs
+
+      - name: Publish test report
+        if: always()
+        run: |
+          [ -f e2e-report.txt ] || exit 0
+          {
+            echo "## End-to-end tests (wallet features)"
+            echo '```'
+            cat e2e-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Service logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail 200
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v
+
   image:
     name: Image ${{ matrix.service }}
-    needs: [test, validate-deploy-script]
+    needs: [test, validate-deploy-script, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: read
