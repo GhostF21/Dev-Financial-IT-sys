@@ -18,19 +18,22 @@ Run all commands from the repository root.
 | API Gateway | Public entry point and Swagger UI | `http://localhost:8080` |
 | Customer Service | Customer onboarding and KYC | Internal; port 3002 |
 | Identity Service | Credentials and login sessions | Internal; port 3003 |
-| Account Service | Accounts, balances, and atomic transfers | Internal; port 3000 is also published locally |
+| Account Service | Accounts, balances, atomic transfers, and FX rates | Internal; port 3000 is also published locally |
 | Payment Service | Payments and transaction history | Internal; port 3001 is also published locally |
 | Wallet Service | Digital wallets, P2P transfers, QR payments, wallet history | Internal; port 3006 |
-| Ledger Service | Internal ledger adapter | Internal; port 3005 |
-| Notification Service | Internal payment notifications | Internal; port 3004 |
+| Ledger Service | Double-entry ledger | Internal; port 3005 |
+| Notification Service | In-app notifications | Internal; port 3004 |
 | PostgreSQL | Persistent application data | port 5432 |
-| Wallet web app | Browser client for the wallet features | `http://localhost:8080/wallet/` |
+| FinNova web app | Customer app for every service (sign-up, login, wallets, payments, QR, ...) | `http://localhost:8080/` |
+| Wallet developer console | Low-level browser client for the wallet API | `http://localhost:8080/wallet/` |
 
 The gateway routes `/customers` to Customer Service, `/auth` to Identity Service,
-`/accounts` to Account Service, `/payments` plus `/transactions` to Payment
-Service, and `/wallets` plus `/qr-payments` to Wallet Service. It also serves the
-wallet web app at `/wallet/`. Ledger and notification endpoints are not publicly
-exposed.
+`/accounts` plus `/fx` to Account Service, `/payments` plus `/transactions` to
+Payment Service, `/wallets` plus `/qr-payments` to Wallet Service,
+`/ledger-entries` to Ledger Service (read only), and `/notifications` to
+Notification Service (read only). It serves the FinNova web app at `/`, the wallet
+developer console at `/wallet/`, and Swagger UI at `/docs/`. The `/internal/...`
+endpoints are not publicly exposed.
 
 ## Domain flow
 
@@ -181,8 +184,16 @@ The Wallet Service adds a digital wallet and payment workflow to the platform.
   request never moves money twice. A QR code can be paid only once and only
   before it expires. A failed withdrawal is reversed automatically.
 * **Ownership checks.** A wallet requires approved KYC. A bank account used for
-  a top-up or withdrawal must belong to the wallet owner and use the same
-  currency.
+  a top-up or withdrawal must belong to the wallet owner.
+* **Currency conversion.** Supported currencies: EUR, USD, GBP, CHF, PLN, HUF.
+  When money moves between two different currencies (bank payment, P2P transfer,
+  QR payment, top-up or withdrawal between a bank account and a wallet), it is
+  converted automatically at fixed demo rates owned by the Account Service
+  (`GET /fx/rates`, `GET /fx/quote`; 1 EUR = 1.08 USD = 0.85 GBP = 0.95 CHF =
+  4.3 PLN = 395 HUF). The sender is debited in their currency, the receiver is
+  credited the converted amount, and both appear in history, ledger and
+  notifications. A QR request is priced in the payee's currency; a payer with
+  another currency pays the converted amount.
 
 Sandbox test cards (any future expiry, any 3 digit CVC):
 
@@ -194,7 +205,30 @@ Sandbox test cards (any future expiry, any 3 digit CVC):
 | `4000 0000 0000 9995` | Declined, `INSUFFICIENT_FUNDS` |
 | `4000 0000 0000 0069` | Declined, `EXPIRED_CARD` |
 
-### Wallet web app
+### FinNova web app
+
+Open [http://localhost:8080/](http://localhost:8080/) (in Azure: the
+`api-gateway` URL). A single-page app in `webapp/` with a page for every
+service; it calls the public API through the gateway.
+
+| Page | Services used |
+| --- | --- |
+| Sign up (details, identity check, login, first wallet + bank account) | Customer, Identity, Wallet, Account |
+| Log in / Profile / Log out | Identity, Customer |
+| Home (total balance converted to one currency, recent activity) | Wallet, Account, FX |
+| Wallets (open per currency, freeze, withdraw) / Add money (card or bank account) | Wallet |
+| Send to `@username` / Exchange between own wallets | Identity, Wallet, FX |
+| QR pay: request (live status) / pay (camera, image upload or pasted code) | Wallet |
+| Transactions (filters, details, card & bank log) | Wallet |
+| Bank accounts, statements, bank transfer by account number | Account, Payment |
+| Ledger | Ledger |
+| Inbox | Notification |
+
+Test flow: sign up two users in two browsers (or a private window), add money
+with test card `4242 4242 4242 4242`, open wallets in different currencies,
+then send, exchange, and pay QR codes between them.
+
+### Wallet developer console
 
 Open [http://localhost:8080/wallet/](http://localhost:8080/wallet/). The page
 calls the same public API through the gateway.

@@ -1,6 +1,7 @@
 import express from 'express';
 import { Pool } from 'pg';
 import { randomUUID } from 'crypto';
+import { BASE_CURRENCY, RATES, convert, isSupported, rate } from './fx.js';
 
 const app = express();
 app.use(express.json());
@@ -69,6 +70,9 @@ app.post('/accounts', async (req, res) => {
   if (!customerId || !['CHECKING', 'SAVINGS'].includes(accountType) || !/^[A-Z]{3}$/.test(currency || '') || !Number.isFinite(openingBalance) || openingBalance < 0) {
     return res.status(422).json({ code: 'VALIDATION_ERROR', message: 'customerId, accountType, currency are required' });
   }
+  if (!isSupported(currency)) {
+    return res.status(422).json({ code: 'UNSUPPORTED_CURRENCY', message: `currency must be one of ${Object.keys(RATES).join(', ')}` });
+  }
   let customer;
   try {
     const response = await fetch(`${CUSTOMER_SERVICE_URL}/customers/${customerId}`);
@@ -105,6 +109,32 @@ async function publishNotification(recipientId, type, payload) {
   }
 }
 
+// A customer's accounts, or the account with a given account number (to pay someone).
+app.get('/accounts', async (req, res) => {
+  const { customerId, accountNumber } = req.query;
+  if (accountNumber) {
+    const { rows } = await pool.query('SELECT * FROM accounts WHERE account_number = $1', [String(accountNumber)]);
+    if (rows.length === 0) return res.status(404).json({ code: 'NOT_FOUND', message: 'Account not found' });
+    return res.json([toAccountDto(rows[0])]);
+  }
+  if (!/^[0-9a-f-]{36}$/i.test(customerId || '')) {
+    return res.status(400).json({ code: 'BAD_REQUEST', message: 'customerId or accountNumber query parameter is required' });
+  }
+  const { rows } = await pool.query('SELECT * FROM accounts WHERE customer_id = $1 ORDER BY created_at', [customerId]);
+  res.json(rows.map(toAccountDto));
+});
+
+app.get('/fx/rates', (_req, res) => res.json({ base: BASE_CURRENCY, rates: RATES }));
+
+app.get('/fx/quote', (req, res) => {
+  const { from, to } = req.query;
+  const amount = Number(req.query.amount);
+  if (!isSupported(from) || !isSupported(to) || !Number.isFinite(amount) || amount <= 0) {
+    return res.status(422).json({ code: 'VALIDATION_ERROR', message: `from and to must be one of ${Object.keys(RATES).join(', ')}, amount must be positive` });
+  }
+  res.json({ from, to, amount, rate: rate(from, to), convertedAmount: convert(amount, from, to) });
+});
+
 app.get('/accounts/:id', async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM accounts WHERE id=$1', [req.params.id]);
   if (rows.length === 0) return res.status(404).json({ code: 'NOT_FOUND', message: 'Account not found' });
@@ -126,6 +156,8 @@ app.patch('/internal/accounts/:id/balance', async (req, res) => {
 
 // Account management owns the balance aggregate. A payment requests this operation
 // instead of changing account rows itself, so debit and credit are atomic.
+// `amount` / `currency` are in the source account's currency; if the destination account
+// uses another currency, it is credited the amount converted at the fixed FX rate.
 app.post('/internal/transfers', async (req, res) => {
   const { fromAccountId, toAccountId, amount, currency } = req.body || {};
   if (!fromAccountId || !toAccountId || fromAccountId === toAccountId || !Number.isFinite(amount) || amount <= 0 || !currency) {
@@ -141,15 +173,24 @@ app.post('/internal/transfers', async (req, res) => {
     if (rows.length !== 2) { await client.query('ROLLBACK'); return res.status(404).json({ code: 'ACCOUNT_NOT_FOUND', message: 'Source or destination account not found' }); }
     const from = rows.find((row) => row.id === fromAccountId);
     const to = rows.find((row) => row.id === toAccountId);
-    if (from.status !== 'ACTIVE' || to.status !== 'ACTIVE' || from.currency !== currency || to.currency !== currency) {
+    if (from.status !== 'ACTIVE' || to.status !== 'ACTIVE' || from.currency !== currency) {
       await client.query('ROLLBACK');
-      return res.status(422).json({ code: 'TRANSFER_REJECTED', message: 'Accounts must be active and use the requested currency' });
+      return res.status(422).json({ code: 'TRANSFER_REJECTED', message: 'Accounts must be active and the currency must be the source account currency' });
+    }
+    if (!isSupported(from.currency) || !isSupported(to.currency)) {
+      await client.query('ROLLBACK');
+      return res.status(422).json({ code: 'UNSUPPORTED_CURRENCY', message: `Cannot convert between ${from.currency} and ${to.currency}` });
     }
     if (Number(from.balance) < amount) { await client.query('ROLLBACK'); return res.status(402).json({ code: 'INSUFFICIENT_FUNDS', message: 'Insufficient funds' }); }
+    const creditAmount = convert(amount, from.currency, to.currency);
     const debit = await client.query('UPDATE accounts SET balance = balance - $1 WHERE id = $2 RETURNING *', [amount, fromAccountId]);
-    const credit = await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING *', [amount, toAccountId]);
+    const credit = await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING *', [creditAmount, toAccountId]);
     await client.query('COMMIT');
-    res.json({ fromAccount: toAccountDto(debit.rows[0]), toAccount: toAccountDto(credit.rows[0]) });
+    res.json({
+      fromAccount: toAccountDto(debit.rows[0]),
+      toAccount: toAccountDto(credit.rows[0]),
+      fx: { fromAmount: amount, fromCurrency: from.currency, toAmount: creditAmount, toCurrency: to.currency, rate: rate(from.currency, to.currency) },
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);

@@ -40,5 +40,15 @@ app.get('/internal/notifications/:recipientId', async (req, res) => {
   res.json(rows);
 });
 
+// In-app inbox for one customer (public, routed through the API Gateway).
+app.get('/notifications', async (req, res) => {
+  const { recipientId } = req.query;
+  if (!/^[0-9a-f-]{36}$/i.test(recipientId || '')) return res.status(400).json({ code: 'BAD_REQUEST', message: 'recipientId query parameter is required' });
+  const { rows } = await pool.query('SELECT * FROM notifications WHERE recipient_id = $1 ORDER BY created_at DESC LIMIT 100', [recipientId]);
+  res.json(rows.map((r) => ({
+    id: r.id, recipientId: r.recipient_id, channel: r.channel, type: r.type, payload: r.payload, status: r.status, createdAt: r.created_at,
+  })));
+});
+
 const port = process.env.PORT || 3004;
 initDbWithRetry().then(() => app.listen(port, () => console.log(`notification-service listening on ${port}`))).catch((err) => { console.error('DB init failed', err); process.exit(1); });

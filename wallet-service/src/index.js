@@ -109,6 +109,10 @@ async function initDb() {
       account_id UUID NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    -- Cross-currency transfers: what the destination wallet was credited.
+    ALTER TABLE wallet_transfers ADD COLUMN IF NOT EXISTS to_amount NUMERIC(18,2);
+    ALTER TABLE wallet_transfers ADD COLUMN IF NOT EXISTS to_currency TEXT;
+    ALTER TABLE wallet_transfers ADD COLUMN IF NOT EXISTS fx_rate NUMERIC(18,8);
   `);
 }
 
@@ -218,6 +222,28 @@ async function insertWalletTransaction(client, tx) {
   return rows[0];
 }
 
+// ---------------------------------------------------------------------------
+// FX: fixed demo rates owned by the Account Service (units per 1 EUR), cached briefly.
+// ---------------------------------------------------------------------------
+let ratesCache = { rates: null, fetchedAt: 0 };
+async function getRates() {
+  if (ratesCache.rates && Date.now() - ratesCache.fetchedAt < 60_000) return ratesCache.rates;
+  const result = await fetchJson(`${ACCOUNT_SERVICE_URL}/fx/rates`, {}, 'ACCOUNT_SERVICE_UNAVAILABLE');
+  if (!result.ok) throw new ApiError(502, 'FX_RATES_UNAVAILABLE', 'Could not load exchange rates');
+  ratesCache = { rates: result.body.rates, fetchedAt: Date.now() };
+  return ratesCache.rates;
+}
+
+function convert(rates, amount, from, to) {
+  if (from === to) return amount;
+  if (!rates[from] || !rates[to]) throw new ApiError(422, 'UNSUPPORTED_CURRENCY', `Cannot convert between ${from} and ${to}`);
+  return Math.round(amount * (rates[to] / rates[from]) * 100) / 100;
+}
+
+const fxNote = (fromAmount, fromCurrency, toAmount, toCurrency) => (
+  fromCurrency === toCurrency ? '' : ` (${fromAmount} ${fromCurrency} = ${toAmount} ${toCurrency})`
+);
+
 async function withTransaction(fn) {
   const client = await pool.connect();
   try {
@@ -280,6 +306,7 @@ async function ensureSettlementAccount(currency) {
 }
 
 // A bank account used for top-up or withdrawal must belong to the wallet owner.
+// It may use another currency: the Payment Service converts at the fixed FX rate.
 async function getOwnedBankAccount(accountId, wallet) {
   requireUuid(accountId, 'bankAccountId');
   const result = await fetchJson(`${ACCOUNT_SERVICE_URL}/accounts/${accountId}`, {}, 'ACCOUNT_SERVICE_UNAVAILABLE');
@@ -289,9 +316,6 @@ async function getOwnedBankAccount(accountId, wallet) {
   if (account.customerId !== wallet.customer_id) {
     throw new ApiError(403, 'ACCOUNT_NOT_OWNED', 'Bank account does not belong to the wallet owner');
   }
-  if (account.currency !== wallet.currency) {
-    throw new ApiError(422, 'CURRENCY_MISMATCH', 'Bank account and wallet must use the same currency');
-  }
   if (account.status !== 'ACTIVE') throw new ApiError(422, 'ACCOUNT_INACTIVE', 'Bank account is not active');
   return account;
 }
@@ -299,8 +323,11 @@ async function getOwnedBankAccount(accountId, wallet) {
 // ---------------------------------------------------------------------------
 // Core wallet-to-wallet transfer (used by P2P and QR payments).
 // Locks both wallets in a stable order so concurrent transfers cannot deadlock.
+// Wallets may use different currencies: `amount` is in the source wallet's currency
+// (amountIn 'source', P2P) or the destination's (amountIn 'destination', QR requests);
+// the other side is converted at the fixed FX rate.
 // ---------------------------------------------------------------------------
-async function executeWalletTransfer(client, { fromWalletId, toWalletId, amount, description, transferType, qrPaymentId, idempotencyKey }) {
+async function executeWalletTransfer(client, { fromWalletId, toWalletId, amount, amountIn = 'source', rates, description, transferType, qrPaymentId, idempotencyKey }) {
   if (fromWalletId === toWalletId) throw new ApiError(422, 'SAME_WALLET', 'Source and destination wallets must be different');
   const { rows } = await client.query(
     'SELECT * FROM wallets WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE',
@@ -311,39 +338,47 @@ async function executeWalletTransfer(client, { fromWalletId, toWalletId, amount,
   if (!from) throw new ApiError(404, 'WALLET_NOT_FOUND', 'Source wallet not found');
   if (!to) throw new ApiError(404, 'WALLET_NOT_FOUND', 'Destination wallet not found');
   if (from.status !== 'ACTIVE' || to.status !== 'ACTIVE') throw new ApiError(422, 'WALLET_INACTIVE', 'Both wallets must be active');
-  if (from.currency !== to.currency) throw new ApiError(422, 'CURRENCY_MISMATCH', 'Wallets must use the same currency');
-  if (Number(from.balance) < amount) throw new ApiError(402, 'INSUFFICIENT_FUNDS', 'Insufficient wallet balance');
+
+  const fromAmount = amountIn === 'source' ? amount : convert(rates, amount, to.currency, from.currency);
+  const toAmount = amountIn === 'source' ? convert(rates, amount, from.currency, to.currency) : amount;
+  if (fromAmount <= 0 || toAmount <= 0) throw new ApiError(422, 'AMOUNT_TOO_SMALL', 'Amount is too small to convert');
+  if (Number(from.balance) < fromAmount) throw new ApiError(402, 'INSUFFICIENT_FUNDS', 'Insufficient wallet balance');
+  const fxRate = from.currency === to.currency ? 1 : rates[to.currency] / rates[from.currency];
+  const note = `${description || (transferType === 'QR_PAYMENT' ? 'QR payment' : 'Transfer')}${fxNote(fromAmount, from.currency, toAmount, to.currency)}`;
 
   const transferId = randomUUID();
-  const debit = await client.query('UPDATE wallets SET balance = balance - $1 WHERE id = $2 RETURNING *', [amount, fromWalletId]);
-  const credit = await client.query('UPDATE wallets SET balance = balance + $1 WHERE id = $2 RETURNING *', [amount, toWalletId]);
+  const debit = await client.query('UPDATE wallets SET balance = balance - $1 WHERE id = $2 RETURNING *', [fromAmount, fromWalletId]);
+  const credit = await client.query('UPDATE wallets SET balance = balance + $1 WHERE id = $2 RETURNING *', [toAmount, toWalletId]);
   const transfer = await client.query(
-    `INSERT INTO wallet_transfers (id, from_wallet_id, to_wallet_id, amount, currency, transfer_type, description, qr_payment_id, idempotency_key, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'COMPLETED') RETURNING *`,
-    [transferId, fromWalletId, toWalletId, amount, from.currency, transferType, description || null, qrPaymentId || null, idempotencyKey || null],
+    `INSERT INTO wallet_transfers (id, from_wallet_id, to_wallet_id, amount, currency, transfer_type, description, qr_payment_id, idempotency_key, status, to_amount, to_currency, fx_rate)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'COMPLETED',$10,$11,$12) RETURNING *`,
+    [transferId, fromWalletId, toWalletId, fromAmount, from.currency, transferType, description || null, qrPaymentId || null, idempotencyKey || null,
+      toAmount, to.currency, fxRate],
   );
   const sentType = transferType === 'QR_PAYMENT' ? 'QR_PAYMENT_SENT' : 'P2P_SENT';
   const receivedType = transferType === 'QR_PAYMENT' ? 'QR_PAYMENT_RECEIVED' : 'P2P_RECEIVED';
   await insertWalletTransaction(client, {
-    walletId: fromWalletId, type: sentType, direction: 'DEBIT', amount, currency: from.currency,
-    balanceAfter: debit.rows[0].balance, counterpartyWalletId: toWalletId, referenceId: transferId, description,
+    walletId: fromWalletId, type: sentType, direction: 'DEBIT', amount: fromAmount, currency: from.currency,
+    balanceAfter: debit.rows[0].balance, counterpartyWalletId: toWalletId, referenceId: transferId, description: note,
   });
   await insertWalletTransaction(client, {
-    walletId: toWalletId, type: receivedType, direction: 'CREDIT', amount, currency: from.currency,
-    balanceAfter: credit.rows[0].balance, counterpartyWalletId: fromWalletId, referenceId: transferId, description,
+    walletId: toWalletId, type: receivedType, direction: 'CREDIT', amount: toAmount, currency: to.currency,
+    balanceAfter: credit.rows[0].balance, counterpartyWalletId: fromWalletId, referenceId: transferId, description: note,
   });
   return { transfer: transfer.rows[0], from: debit.rows[0], to: credit.rows[0] };
 }
 
 function transferSideEffects({ transfer, from, to }) {
   const amount = Number(transfer.amount);
+  const toAmount = Number(transfer.to_amount ?? transfer.amount);
+  const toCurrency = transfer.to_currency || transfer.currency;
   const sentType = transfer.transfer_type === 'QR_PAYMENT' ? 'QR_PAYMENT_SENT' : 'WALLET_TRANSFER_SENT';
   const receivedType = transfer.transfer_type === 'QR_PAYMENT' ? 'QR_PAYMENT_RECEIVED' : 'WALLET_TRANSFER_RECEIVED';
-  const payload = { transferId: transfer.id, amount, currency: transfer.currency, fromWalletId: from.id, toWalletId: to.id };
+  const payload = { transferId: transfer.id, amount, currency: transfer.currency, toAmount, toCurrency, fromWalletId: from.id, toWalletId: to.id };
   return publishSideEffects({
     ledger: [
       { transactionId: transfer.id, accountId: from.id, entryType: 'DEBIT', amount, currency: transfer.currency },
-      { transactionId: transfer.id, accountId: to.id, entryType: 'CREDIT', amount, currency: transfer.currency },
+      { transactionId: transfer.id, accountId: to.id, entryType: 'CREDIT', amount: toAmount, currency: toCurrency },
     ],
     notifications: [
       { recipientId: from.customer_id, type: sentType, payload },
@@ -368,6 +403,8 @@ app.post('/wallets', asyncHandler(async (req, res) => {
   const { customerId, currency = 'EUR' } = req.body || {};
   requireUuid(customerId, 'customerId');
   if (!/^[A-Z]{3}$/.test(currency)) throw new ApiError(422, 'VALIDATION_ERROR', 'currency must be an ISO 4217 code such as EUR');
+  const rates = await getRates();
+  if (!rates[currency]) throw new ApiError(422, 'UNSUPPORTED_CURRENCY', `currency must be one of ${Object.keys(rates).join(', ')}`);
 
   const customer = await fetchJson(`${CUSTOMER_SERVICE_URL}/customers/${customerId}`, {}, 'CUSTOMER_SERVICE_UNAVAILABLE');
   if (customer.status === 404) throw new ApiError(404, 'CUSTOMER_NOT_FOUND', 'Referenced customer not found');
@@ -425,8 +462,11 @@ app.post('/wallets/:id/top-up', asyncHandler(async (req, res) => {
   }
 
   let cardInfo = null;
-  if (method === 'BANK_ACCOUNT') await getOwnedBankAccount(bankAccountId, wallet);
+  let bankAccount = null;
+  if (method === 'BANK_ACCOUNT') bankAccount = await getOwnedBankAccount(bankAccountId, wallet);
   else cardInfo = inspectCard(card);
+  // The bank account is debited in its own currency; the payment converts it into the wallet currency.
+  const bankAmount = bankAccount ? convert(await getRates(), amount, wallet.currency, bankAccount.currency) : null;
 
   const settlement = await ensureSettlementAccount(wallet.currency);
   const gatewayId = randomUUID();
@@ -441,7 +481,7 @@ app.post('/wallets/:id/top-up', asyncHandler(async (req, res) => {
   try {
     if (method === 'BANK_ACCOUNT') {
       ({ reference } = await bankTransfer({
-        fromAccountId: bankAccountId, toAccountId: settlement.account_id, amount, currency: wallet.currency,
+        fromAccountId: bankAccountId, toAccountId: settlement.account_id, amount: bankAmount, currency: bankAccount.currency,
         description: description || 'Wallet top-up', idempotencyKey: gatewayId,
       }));
     } else {
@@ -464,7 +504,8 @@ app.post('/wallets/:id/top-up', asyncHandler(async (req, res) => {
     const tx = await insertWalletTransaction(client, {
       walletId: wallet.id, type: 'TOP_UP', direction: 'CREDIT', amount, currency: wallet.currency,
       balanceAfter: updated.rows[0].balance, referenceId: gatewayId, paymentMethod: method,
-      description: description || (method === 'CARD' ? `Card top-up ${cardInfo.brand} ****${cardInfo.last4}` : 'Top-up from bank account'),
+      description: description || (method === 'CARD' ? `Card top-up ${cardInfo.brand} ****${cardInfo.last4}`
+        : `Top-up from bank account${fxNote(bankAmount, bankAccount.currency, amount, wallet.currency)}`),
     });
     const gw = await client.query(
       `UPDATE gateway_transactions SET status = 'SUCCEEDED', gateway_reference = $2, completed_at = now() WHERE id = $1 RETURNING *`,
@@ -571,8 +612,9 @@ app.post('/wallets/transfers', asyncHandler(async (req, res) => {
     }
   }
 
+  const rates = await getRates();
   const result = await withTransaction((client) => executeWalletTransfer(client, {
-    fromWalletId, toWalletId, amount, description, transferType: 'P2P', idempotencyKey: idempotencyKey ? String(idempotencyKey) : null,
+    fromWalletId, toWalletId, amount, rates, description, transferType: 'P2P', idempotencyKey: idempotencyKey ? String(idempotencyKey) : null,
   }));
   await transferSideEffects(result);
   res.status(201).json({ ...toTransferDto(result.transfer), fromWallet: toWalletDto(result.from), toWallet: toWalletDto(result.to) });
@@ -644,6 +686,7 @@ app.post('/qr-payments/:token/pay', asyncHandler(async (req, res) => {
   const { payerWalletId } = req.body || {};
   requireUuid(payerWalletId, 'payerWalletId');
 
+  const rates = await getRates();
   const result = await withTransaction(async (client) => {
     const { rows } = await client.query('SELECT * FROM qr_payment_requests WHERE token = $1 FOR UPDATE', [token]);
     const qr = rows[0];
@@ -655,7 +698,7 @@ app.post('/qr-payments/:token/pay', asyncHandler(async (req, res) => {
       return { expired: true };
     }
     const transferResult = await executeWalletTransfer(client, {
-      fromWalletId: payerWalletId, toWalletId: qr.payee_wallet_id, amount: Number(qr.amount),
+      fromWalletId: payerWalletId, toWalletId: qr.payee_wallet_id, amount: Number(qr.amount), amountIn: 'destination', rates,
       description: qr.description || 'QR payment', transferType: 'QR_PAYMENT', qrPaymentId: qr.id,
     });
     const updated = await client.query(
@@ -734,6 +777,8 @@ function toTransactionDto(r) {
 function toTransferDto(r) {
   return {
     id: r.id, fromWalletId: r.from_wallet_id, toWalletId: r.to_wallet_id, amount: Number(r.amount), currency: r.currency,
+    toAmount: r.to_amount === null ? Number(r.amount) : Number(r.to_amount), toCurrency: r.to_currency || r.currency,
+    fxRate: r.fx_rate === null ? 1 : Number(r.fx_rate),
     type: r.transfer_type, description: r.description, qrPaymentId: r.qr_payment_id, idempotencyKey: r.idempotency_key,
     status: r.status, createdAt: r.created_at,
   };

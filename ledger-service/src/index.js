@@ -37,5 +37,17 @@ app.post('/internal/ledger-entries', async (req, res) => {
   res.status(201).json(rows[0]);
 });
 
+// Double-entry view for one account or wallet (wallet entries use the wallet ID as accountId).
+app.get('/ledger-entries', async (req, res) => {
+  const { accountId } = req.query;
+  if (!/^[0-9a-f-]{36}$/i.test(accountId || '')) return res.status(400).json({ code: 'BAD_REQUEST', message: 'accountId query parameter is required' });
+  const limit = Math.min(200, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
+  const { rows } = await pool.query('SELECT * FROM ledger_entries WHERE account_id = $1 ORDER BY created_at DESC LIMIT $2', [accountId, limit]);
+  res.json(rows.map((r) => ({
+    id: r.id, transactionId: r.transaction_id, accountId: r.account_id, entryType: r.entry_type,
+    amount: Number(r.amount), currency: r.currency, createdAt: r.created_at,
+  })));
+});
+
 const port = process.env.PORT || 3005;
 initDbWithRetry().then(() => app.listen(port, () => console.log(`ledger-service listening on ${port}`))).catch((err) => { console.error('DB init failed', err); process.exit(1); });
