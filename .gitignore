@@ -12,3 +12,6 @@ node_modules/
 *.tfstate.*
 .terraform/
 backend.hcl
+
+# End-to-end test report (written by the e2e tests)
+e2e-report.txt
