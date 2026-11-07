@@ -15,3 +15,8 @@ backend.hcl
 
 # End-to-end test report (written by the e2e tests)
 e2e-report.txt
+
+# docs
+docs
+scripts/seed*
+scripts/take*
