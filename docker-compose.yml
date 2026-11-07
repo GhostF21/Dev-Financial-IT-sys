@@ -159,6 +159,8 @@ services:
       - customer-service
       - identity-service
       - wallet-service
+      - ledger-service
+      - notification-service
     ports:
       - "8080:8080"
 

@@ -93,15 +93,44 @@ app.post('/auth/login', async (req, res) => {
   res.json({ accessToken: sessionId, tokenType: 'Bearer', expiresAt, user: toUser(user) });
 });
 
-app.get('/internal/sessions/:id', async (req, res) => {
+async function findSession(id) {
+  if (!/^[0-9a-f-]{36}$/i.test(id || '')) return null;
   const { rows } = await pool.query(
-    `SELECT s.id, s.expires_at, u.id AS user_id, u.customer_id, u.status
+    `SELECT s.id, s.expires_at, u.id AS user_id, u.customer_id, u.username, u.status, u.created_at
      FROM login_sessions s JOIN user_accounts u ON u.id = s.user_id WHERE s.id = $1`,
-    [req.params.id],
+    [id],
   );
   const session = rows[0];
-  if (!session || session.status !== 'ACTIVE' || new Date(session.expires_at) <= new Date()) return res.status(401).json({ code: 'INVALID_SESSION', message: 'Session is invalid or expired' });
+  if (!session || session.status !== 'ACTIVE' || new Date(session.expires_at) <= new Date()) return null;
+  return session;
+}
+
+const bearerToken = (req) => (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
+
+app.get('/internal/sessions/:id', async (req, res) => {
+  const session = await findSession(req.params.id);
+  if (!session) return res.status(401).json({ code: 'INVALID_SESSION', message: 'Session is invalid or expired' });
   res.json({ userId: session.user_id, customerId: session.customer_id, expiresAt: session.expires_at });
+});
+
+// The signed-in user (Authorization: Bearer <accessToken from /auth/login>).
+app.get('/auth/me', async (req, res) => {
+  const session = await findSession(bearerToken(req));
+  if (!session) return res.status(401).json({ code: 'INVALID_SESSION', message: 'Session is invalid or expired' });
+  res.json({ user: toUser({ ...session, id: session.user_id }), expiresAt: session.expires_at });
+});
+
+app.post('/auth/logout', async (req, res) => {
+  const token = bearerToken(req);
+  if (/^[0-9a-f-]{36}$/i.test(token)) await pool.query('DELETE FROM login_sessions WHERE id = $1', [token]);
+  res.status(204).end();
+});
+
+// Public lookup by username, used to send money to another user ("@username").
+app.get('/auth/users/:username', async (req, res) => {
+  const { rows } = await pool.query(`SELECT username, customer_id FROM user_accounts WHERE username = $1 AND status = 'ACTIVE'`, [req.params.username]);
+  if (!rows[0]) return res.status(404).json({ code: 'USER_NOT_FOUND', message: 'No user with this username' });
+  res.json({ username: rows[0].username, customerId: rows[0].customer_id });
 });
 
 function toUser(row) { return { id: row.id, customerId: row.customer_id, username: row.username, status: row.status, createdAt: row.created_at }; }

@@ -41,6 +41,10 @@ async function initDb() {
       related_payment_id UUID,
       timestamp TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    -- Cross-currency payments: what the destination account was credited.
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS to_amount NUMERIC(18,2);
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS to_currency TEXT;
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS fx_rate NUMERIC(18,8);
   `);
 }
 
@@ -98,31 +102,36 @@ app.post('/payments', async (req, res) => {
     return res.status(503).json({ code: 'ACCOUNT_SERVICE_UNAVAILABLE', message: 'Could not reach account service' });
   }
 
+  // The destination may use another currency; the Account Service converted the credit.
+  const { toAmount, toCurrency, rate } = transfer.fx || { toAmount: Number(amount), toCurrency: currency, rate: 1 };
+  const fxNote = toCurrency !== currency ? ` (${Number(amount)} ${currency} = ${toAmount} ${toCurrency})` : '';
+
   const id = randomUUID();
   const { rows } = await pool.query(
-    `INSERT INTO payments (id, from_account_id, to_account_id, amount, currency, description, idempotency_key, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'COMPLETED') RETURNING *`,
-    [id, fromAccountId, toAccountId, amount, currency, description, idempotencyKey || null]
+    `INSERT INTO payments (id, from_account_id, to_account_id, amount, currency, description, idempotency_key, status, to_amount, to_currency, fx_rate)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'COMPLETED',$8,$9,$10) RETURNING *`,
+    [id, fromAccountId, toAccountId, amount, currency, description, idempotencyKey || null, toAmount, toCurrency, rate]
   );
 
   await pool.query(
     `INSERT INTO transactions (id, account_id, type, amount, currency, balance_after, description, related_payment_id)
      VALUES ($1,$2,'DEBIT',$3,$4,$5,$6,$7)`,
-    [randomUUID(), fromAccountId, amount, currency, transfer.fromAccount.balance, description, id]
+    [randomUUID(), fromAccountId, amount, currency, transfer.fromAccount.balance, `${description || 'Payment'}${fxNote}`, id]
   );
   await pool.query(
     `INSERT INTO transactions (id, account_id, type, amount, currency, balance_after, description, related_payment_id)
      VALUES ($1,$2,'CREDIT',$3,$4,$5,$6,$7)`,
-    [randomUUID(), toAccountId, amount, currency, transfer.toAccount.balance, description, id]
+    [randomUUID(), toAccountId, toAmount, toCurrency, transfer.toAccount.balance, `${description || 'Payment'}${fxNote}`, id]
   );
 
   // These calls cross bounded contexts. They do not roll back the completed account transfer
   // if the external adapter is temporarily unavailable; the payment remains the source of truth.
+  const payload = { paymentId: id, amount: Number(amount), currency, toAmount, toCurrency };
   await Promise.all([
     postInternal(LEDGER_SERVICE_URL, '/internal/ledger-entries', { transactionId: id, accountId: fromAccountId, entryType: 'DEBIT', amount: Number(amount), currency }),
-    postInternal(LEDGER_SERVICE_URL, '/internal/ledger-entries', { transactionId: id, accountId: toAccountId, entryType: 'CREDIT', amount: Number(amount), currency }),
-    postInternal(NOTIFICATION_SERVICE_URL, '/internal/notifications', { recipientId: transfer.fromAccount.customerId, type: 'PAYMENT_SENT', payload: { paymentId: id, amount: Number(amount), currency } }),
-    postInternal(NOTIFICATION_SERVICE_URL, '/internal/notifications', { recipientId: transfer.toAccount.customerId, type: 'PAYMENT_RECEIVED', payload: { paymentId: id, amount: Number(amount), currency } }),
+    postInternal(LEDGER_SERVICE_URL, '/internal/ledger-entries', { transactionId: id, accountId: toAccountId, entryType: 'CREDIT', amount: toAmount, currency: toCurrency }),
+    postInternal(NOTIFICATION_SERVICE_URL, '/internal/notifications', { recipientId: transfer.fromAccount.customerId, type: 'PAYMENT_SENT', payload }),
+    postInternal(NOTIFICATION_SERVICE_URL, '/internal/notifications', { recipientId: transfer.toAccount.customerId, type: 'PAYMENT_RECEIVED', payload }),
   ]);
 
   res.status(201).json(toPaymentDto(rows[0]));
@@ -168,6 +177,8 @@ function toPaymentDto(r) {
   return {
     id: r.id, fromAccountId: r.from_account_id, toAccountId: r.to_account_id, amount: Number(r.amount),
     currency: r.currency, description: r.description, idempotencyKey: r.idempotency_key,
+    toAmount: r.to_amount === null ? Number(r.amount) : Number(r.to_amount), toCurrency: r.to_currency || r.currency,
+    fxRate: r.fx_rate === null ? 1 : Number(r.fx_rate),
     status: r.status, createdAt: r.created_at,
   };
 }
